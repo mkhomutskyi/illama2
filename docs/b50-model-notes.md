@@ -629,12 +629,10 @@ bind-mounted read-only into the container.
 ### Ports
 
 The default Illama port is `11434`. These notes use `11435` so Illama can sit
-beside another server. Illama and ComfyUI share the B50's 16 GB VRAM — unload
-one before measuring the other. ComfyUI on this host is a **local** image
-(`llm-scaler-omni:0.2.0-b2-comfyui-bmg`). Docker Hub
-`intel/llm-scaler-omni:latest` was still 0.2.0-b1 when that pin was chosen;
-do not substitute it for the validated local image. See the public
-[ComfyUI companion guide](comfyui-b50.md); private operator notes are not published.
+beside another server. Other workloads share the B50's16GB VRAM; stop them
+before measuring Illama. Image generation has its own
+[ComfyUI repository](https://github.com/mkhomutskyi/comfyui-intel-arc).
+Private operator notes are not published.
 
 ```bash
 curl -s -X POST http://localhost:11435/v1/unload
@@ -666,3 +664,4 @@ curl -s http://localhost:11434/api/generate \
   Python. Use `python3 -m json.tool | grep` or a heredoc instead.
 - `curl -d` without `-H 'Content-Type: application/json'` gets form-encoded
   and fails Pydantic validation with a confusing root-level error.
+

@@ -314,14 +314,7 @@ def run(model, workload, prompt, limit, phase, rep):
 
 completed = False
 try:
-    queue = call("/queue", base="http://127.0.0.1:8188")
-    if queue.get("queue_running") or queue.get("queue_pending"):
-        raise RuntimeError("ComfyUI queue is not idle")
-    call(
-        "/free",
-        {"unload_models": True, "free_memory": True},
-        base="http://127.0.0.1:8188",
-    )
+    # Stop competing GPU workloads before this run; do not manage other services.
     for model in MODELS:
         call("/v1/unload", {})
         run(model, "latency", SHORT, 32, "reload", 0)

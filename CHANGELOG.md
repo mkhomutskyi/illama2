@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## Repository separation — 2026-10-19
+
+- Illama now contains LLM inference, conversion, APIs, deployment and text benchmarks only.
+- Moved ComfyUI setup, Compose examples, workflows and image measurements to
+  https://github.com/mkhomutskyi/comfyui-intel-arc .
+- TTS/STT setup is a separate project at
+  https://github.com/mkhomutskyi/speech-intel-arc .
+- The detailed LLM benchmark recorder no longer calls another service's API;
+  stop competing GPU workloads yourself before measuring.
+
 ## Publication maintenance — 2026-10-19
 
 - Aligned direct builder/runner build defaults and the deployment example with

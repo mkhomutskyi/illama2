@@ -14,8 +14,11 @@ nightly profiles remain separately pinned; see [CHANGELOG.md](CHANGELOG.md).
 |---|---|
 | [Arc Pro B50 quickstart](docs/arc-b50-quickstart.md) | Build, select the correct GPU, configure, infer, and roll back |
 | [October 18, 2026 measurements](docs/benchmarks/2026-10-18-b50.md) | Three models, exact nightly versions, reproducible protocol and limitations |
-| [ComfyUI on B50](docs/comfyui-b50.md) | Independent Intel XPU image, existing-model tests and VRAM limits |
 | [Security policy](SECURITY.md) | Credential handling, trusted-network scope and reporting |
+
+This repository covers Illama LLM inference only. Image-generation setup lives
+in [comfyui-intel-arc](https://github.com/mkhomutskyi/comfyui-intel-arc), and
+speech setup lives in [speech-intel-arc](https://github.com/mkhomutskyi/speech-intel-arc).
 
 The default build uses **OpenVINO 2026.4.1**. The measured **2026.5 nightly** is
 an explicit [optional profile](runner/Dockerfile.nightly), not a silent change
