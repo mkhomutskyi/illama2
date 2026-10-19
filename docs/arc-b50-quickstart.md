@@ -114,5 +114,5 @@ Unload one workload before starting the other:
 curl -fsS -X POST http://localhost:11434/v1/unload
 ```
 
-The [ComfyUI companion guide](comfyui-b50.md) describes the independently
+The [separate ComfyUI project](https://github.com/mkhomutskyi/comfyui-intel-arc) describes the independently
 pinned image stack. Installing Illama does not install ComfyUI.
