@@ -1,0 +1,40 @@
+Illama
+Copyright 2026 mkhomutskyi
+
+This product includes software developed by third parties. Illama's own
+code is Apache License 2.0 (see LICENSE). The components below keep their
+own licenses. A summary is also in README.md under "Third-party stacks".
+
+OpenVINO, OpenVINO GenAI, OpenVINO Tokenizers, and NNCF
+  Copyright Intel Corporation and contributors
+  https://github.com/openvinotoolkit/openvino
+  Apache License 2.0
+
+Intel Graphics Compute Runtime and Level Zero
+  Copyright Intel Corporation
+  https://github.com/intel/compute-runtime
+  MIT License
+
+Hugging Face optimum-intel, Transformers, and Accelerate
+  Copyright Hugging Face and contributors
+  https://github.com/huggingface/optimum-intel
+  Apache License 2.0
+
+FastAPI
+  Copyright Sebastián Ramírez
+  https://github.com/fastapi/fastapi
+  MIT License
+
+Uvicorn
+  Copyright Encode OSS Ltd
+  https://github.com/encode/uvicorn
+  BSD 3-Clause License
+
+Pydantic
+  Copyright Samuel Colvin and contributors
+  https://github.com/pydantic/pydantic
+  MIT License
+
+Model files downloaded with `illama pull` are not part of this
+distribution. Each checkpoint remains under the license chosen by its
+publisher.

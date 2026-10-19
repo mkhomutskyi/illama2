@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.env
+.env.*
+# Keep the documented examples / templates checked in.
+!.env.example
+!.env.sample
+!.env.template
+*.log
+*.tgz
+.idea/
+.vscode/
+.venv*/
+.DS_Store
+
+# Local operator notes. Keep on disk; never publish.
+docs/local/

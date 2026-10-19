@@ -1,0 +1,12 @@
+{
+  "date": "2026-10-18",
+  "model": "z_image_bf16.safetensors",
+  "resolution": 1024,
+  "steps": 28,
+  "cfg": 3,
+  "seed": 42,
+  "observations": 1,
+  "wall_s": 96.73877610899217,
+  "peak_process_vram_gib": 13.602333068847656,
+  "quality": "Representative output visually coherent; no quantitative score; separate recipe from 8-step timing matrix."
+}

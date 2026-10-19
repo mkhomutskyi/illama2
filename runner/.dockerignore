@@ -1,0 +1,14 @@
+# Keep the build context minimal so `docker build runner/` is deterministic
+# regardless of stray files a developer leaves behind in this directory.
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.tmp
+*.swp
+.DS_Store
+.git
+.gitignore
+.idea
+.vscode

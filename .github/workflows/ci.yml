@@ -1,0 +1,82 @@
+name: ci
+
+# Runs on every push to master and on every pull request. Three quick
+# jobs plus a public-credential check that validate without
+# OpenVINO, GPU, or Docker:
+#
+#   shellcheck   bash linter for the illama CLI and setup.sh
+#   ruff         python linter for runner/server.py and scripts/
+#   pytest       the runner/server.py pure-python helper smoke suite
+#
+# OpenVINO, openvino_genai, PIL, numpy, and requests are NOT installed in
+# CI - tests/conftest.py injects minimal stubs into sys.modules so the
+# server module imports cleanly. End-to-end tests that need the real
+# Intel runtime live on the deployment host (see scripts/benchmark_api.py
+# and `illama bench`).
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run shellcheck on illama CLI and setup.sh
+        run: |
+          # Surface errors only - the remaining SC2155 warnings are a
+          # pre-existing style issue tracked in the backlog. New code
+          # added in PRs that introduces fresh warnings will still need
+          # to address them, but we don't fail the build on the legacy
+          # set.
+          shellcheck -S error illama setup.sh
+
+  ruff:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install ruff==0.7.4
+      - name: Lint runner/ and scripts/
+        run: |
+          # Same Python version as the runner image so ast-grep / typing
+          # behaviours match production.
+          ruff check runner/ scripts/ tests/
+
+  pytest:
+    name: pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install minimal test deps
+        run: |
+          # Deliberately NOT installing openvino / openvino-genai - the
+          # smoke suite stubs them in tests/conftest.py.
+          pip install pytest==8.4.2 fastapi==0.136.1 pydantic==2.13.3 uvicorn==0.46.0 httpx==0.28.1
+      - name: Run smoke tests
+        run: pytest tests/ -v
+
+  public-secrets:
+    name: public credential patterns
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check tracked files and reachable history without printing values
+        run: python scripts/check_public_secrets.py --history

@@ -1,0 +1,63 @@
+# Illama runner - systemd unit (compose-based).
+#
+# Manages `docker compose up -d` / `down` for the deploy/docker-compose.yml
+# in this repo. Use this when you want the runner to come back automatically
+# after a host reboot OR when you want journalctl-style logs alongside the
+# rest of your Linux services.
+#
+# Install:
+#
+#   sudo cp /opt/illama/deploy/illama-runner.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now illama-runner
+#
+# Verify:
+#
+#   systemctl status illama-runner
+#   journalctl -u illama-runner -f
+#   curl -s http://localhost:11434/illama/health
+#
+# Switch back to the bash CLI:
+#
+#   sudo systemctl disable --now illama-runner
+#   illama serve
+#
+# This unit is intentionally a thin wrapper: the actual container config
+# lives in deploy/docker-compose.yml and deploy/.env, so editing those
+# (and `systemctl restart illama-runner`) is the canonical way to change
+# settings.
+
+[Unit]
+Description=Illama OpenVINO LLM runner (Docker Compose)
+Documentation=https://github.com/mkhomutskyi/illama2
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Where deploy/docker-compose.yml + deploy/.env live. setup.sh installs
+# them at /opt/illama/deploy. Override by editing this unit if you put
+# them elsewhere.
+WorkingDirectory=/opt/illama/deploy
+
+# Pull-if-stale, then up. --remove-orphans keeps things clean if the
+# service name in compose ever changes.
+ExecStart=/usr/bin/docker compose up -d --remove-orphans
+ExecStop=/usr/bin/docker compose down
+
+# Reload triggers a restart of the runner with whatever's currently in
+# .env / docker-compose.yml. Use:
+#   sudo systemctl reload illama-runner
+ExecReload=/usr/bin/docker compose up -d --remove-orphans
+
+# Modest timeouts: starting the container is fast; waiting for the model
+# to actually warm up isn't this unit's job (the runner's healthcheck
+# handles that).
+TimeoutStartSec=2min
+TimeoutStopSec=2min
+
+[Install]
+WantedBy=multi-user.target

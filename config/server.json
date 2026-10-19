@@ -1,0 +1,16 @@
+{
+  "idle_timeout": "60s",
+  "allow_stream": true,
+  "max_new_tokens_chat": 2048,
+  "max_new_tokens_completion": 2048,
+  "max_messages_per_request": 128,
+  "max_prompt_chars": 131072,
+  "max_stop_sequences": 8,
+  "max_stop_sequence_length": 256,
+  "load_failure_policy": "restart",
+  "pipeline_backend": "auto",
+  "scheduler_cache_size_gb": 2,
+  "scheduler_cache_max_gb": 8,
+  "enable_prefix_caching": true,
+  "prompt_lookup": false
+}

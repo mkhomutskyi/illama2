@@ -1,0 +1,14 @@
+# Optional, tested inference profile. First build the stable image with setup.sh.
+# Model conversion remains on the independently validated stable builder.
+FROM illama-runner:2.6.0
+
+RUN python -m pip install --no-cache-dir pip==26.2.1 && \
+    python -m pip install --no-cache-dir --upgrade --pre \
+      --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly \
+      openvino==2026.5.0.dev20261015 \
+      openvino-genai==2026.5.0.0.dev20261015 \
+      openvino-tokenizers==2026.5.0.0.dev20261015 \
+      fastapi==0.143.3 uvicorn[standard]==0.54.0 pydantic==2.14.1 \
+      pillow==13.0.0 requests==2.34.2 numpy==2.5.4 \
+      httptools==0.9.0 starlette==1.8.0 && \
+    python -m pip check

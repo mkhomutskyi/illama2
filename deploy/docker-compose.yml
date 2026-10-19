@@ -1,0 +1,100 @@
+# Illama runner - production-ready Docker Compose deployment.
+#
+# Mirrors what `illama serve` does (see cmd_serve in the illama CLI), so you
+# can pick whichever entry point fits your ops model:
+#
+#   - `illama serve`     - bash CLI, idempotent, no extra files needed
+#   - `docker compose up -d`  - this file, suitable for systemd/automation
+#
+# Both produce the same container with the same volume layout, so you can
+# stop one and start the other interchangeably as long as the container
+# name (`illama-service`) and port match.
+#
+# Quick start:
+#
+#   1. ./setup.sh                                         # builds illama-runner image
+#   2. cp deploy/.env.example deploy/.env                 # tune ports/timeout/etc.
+#   3. (optional) edit deploy/.env
+#   4. cd deploy && docker compose up -d
+#   5. docker compose logs -f                             # tail server logs
+#   6. curl -s http://localhost:11434/illama/health
+#
+# All paths default to /opt/illama/* so an existing `setup.sh` install works
+# untouched; override via env (ILLAMA_HOME etc.) when running compose from a
+# checkout or non-standard install path.
+
+services:
+  illama-runner:
+    image: "illama-runner:${ILLAMA_RUNNER_TAG:-latest}"
+    container_name: illama-service
+    restart: unless-stopped
+
+    # Intel iGPU / dGPU: passes /dev/dri (renderD128, card0) through to the
+    # container. group_add gives the in-container user access to those
+    # device nodes. Numeric GIDs match the host so render/video map
+    # correctly - on a stock Ubuntu install these are 44 (video) and 110
+    # (render); override in .env if your host differs (run `getent group
+    # video render` to check).
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${HOST_VIDEO_GID:-44}"
+      - "${HOST_RENDER_GID:-110}"
+
+    ports:
+      # Host:container. The runner always listens on 8000 inside the
+      # container; ILLAMA_PORT controls the host-side port.
+      - "${ILLAMA_PORT:-11434}:8000"
+
+    volumes:
+      # Read-only model registry. illama pull writes here from the host
+      # side via the ephemeral builder container, so we deliberately mount
+      # ro to prevent the runner from mutating the registry.
+      - "${ILLAMA_HOME:-/opt/illama}/models:/models:ro"
+      # Read-only server config (config/server.json - max_new_tokens,
+      # max_input_tokens, allow_stream, etc.). Edit on the host and
+      # restart the container to pick up changes.
+      - "${ILLAMA_HOME:-/opt/illama}/config:/config:ro"
+      # Read-write GPU compile cache. First load of a given model
+      # populates this; subsequent loads use it to skip recompilation.
+      # Persisting it across container restarts saves ~10s+ per cold
+      # start on bigger models.
+      - "${ILLAMA_HOME:-/opt/illama}/cache:/cache"
+
+    environment:
+      ILLAMA_MODELS: /models
+      ILLAMA_PORT: "8000"
+      ILLAMA_DEVICE: "${ILLAMA_DEVICE:-GPU}"
+      ILLAMA_CACHE_DIR: /cache
+      # Idle timeout: e.g. 300 / 300s / 5m / 1h. Set 0 to disable idle
+      # auto-unload. Falls back to config/server.json value if unset.
+      ILLAMA_IDLE_TIMEOUT: "${ILLAMA_IDLE_TIMEOUT:-}"
+      # Optional bearer-token auth. Empty = no auth.
+      ILLAMA_API_KEY: "${ILLAMA_API_KEY:-}"
+      # SSRF guard: by default the VLM image fetcher rejects URLs that
+      # resolve to private/loopback/link-local IPs. Set to 1 only on
+      # trusted private networks where you intentionally fetch from
+      # internal hosts.
+      ILLAMA_ALLOW_PRIVATE_IMAGE_URLS: "${ILLAMA_ALLOW_PRIVATE_IMAGE_URLS:-}"
+      # Override the project version baked at build time. Useful if you
+      # tagged a hotfix image without rebuilding.
+      ILLAMA_VERSION: "${ILLAMA_VERSION:-}"
+
+    healthcheck:
+      # Same probe as the Dockerfile HEALTHCHECK, plus a longer
+      # start_period so the first model load on a cold cache doesn't
+      # mark the container unhealthy.
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+
+    # Logs go through Docker's json-file driver by default. Cap them so
+    # an idle host doesn't fill the disk over weeks/months. Adjust if you
+    # ship logs to a central collector.
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

@@ -1,0 +1,686 @@
+[
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": ".gitattributes",
+    "bytes": 1570,
+    "sha256": "34448b82c17d60fec9b65b1f093c115ddbaadc04beb1b0140b6bfed2e012a930"
+  },
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": "README.md",
+    "bytes": 3812,
+    "sha256": "f4b4fb3429bf584833fa43cdea0528fad9552d262aefbf2b08e4acdfd7e2c77a"
+  },
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": "chat_template.jinja",
+    "bytes": 16317,
+    "sha256": "781d10940fbc44be40064b5d43a056fc486c84ceaa55538226368b57314132bf"
+  },
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": "config.json",
+    "bytes": 5174,
+    "sha256": "2b37a0000817cc7680de9902d49d4e1ead2718cfc8f7d4a43a8d0aad80aabc16"
+  },
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": "generation_config.json",
+    "bytes": 203,
+    "sha256": "5439541d3bf0ba9ade7c1122dc14703f85f32a520150351b344b14f48c574cc2"
+  },
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": "model.json",
+    "bytes": 169,
+    "sha256": "e7ad319aa722e1f5db1cfd56f9bc71f04a5658d0fee7b8645ace99e4bd3792e1"
+  },
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": "openvino_config.json",
+    "bytes": 1160,
+    "sha256": "4395b30dfd83db0cb1fb5b7229274c19e23540043d9ba0907cb040071f15a334"
+  },
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": "openvino_detokenizer.bin",
+    "bytes": 4413547,
+    "sha256": "461919bda7b546453e903052588c578e3e94e9e8215b7cec07cb00cb97459d13"
+  },
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": "openvino_detokenizer.xml",
+    "bytes": 27266,
+    "sha256": "3d3d911ee1e28b31e0bd9498dba8f7f3959bea821ad754e9273ecf9caed2067a"
+  },
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": "openvino_language_model.bin",
+    "bytes": 2738063913,
+    "sha256": "59da3849b25737b90b1379e53924e8dcc6abe02778da996ecc0344f1dacd9be6"
+  },
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": "openvino_language_model.xml",
+    "bytes": 5193867,
+    "sha256": "1ff96764cef92c659266cfe9bdc6a585f952f1a902b4fecf09bee099ca873e99"
+  },
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": "openvino_text_embeddings_model.bin",
+    "bytes": 671612936,
+    "sha256": "f4ba107d403f58e4190d0bfef396c9e4eda6762021e4f429c10a53bb4f87aee2"
+  },
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": "openvino_text_embeddings_model.xml",
+    "bytes": 7061,
+    "sha256": "6fc7c1cc010de6993ea7d3fd41fbf325d7b310f7291ae5b03b61376f52fc35d1"
+  },
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": "openvino_text_embeddings_per_layer_model.bin",
+    "bytes": 2819096656,
+    "sha256": "e666691fa271c8b6e26aa6eff33f3030148c0bfe43d3a1514b9b997a9a594c5e"
+  },
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": "openvino_text_embeddings_per_layer_model.xml",
+    "bytes": 17882,
+    "sha256": "b05ba34b035cc5508f3cb283fdf846987f7e7e9f70fdc0efbd319e7bedb137e1"
+  },
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": "openvino_tokenizer.bin",
+    "bytes": 17270328,
+    "sha256": "d151f48d29ba9d22fdf0f071cd16cb68e5f8fba51a5489c3d2df8e29030e4a13"
+  },
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": "openvino_tokenizer.xml",
+    "bytes": 42641,
+    "sha256": "f206b7b4a3663d3a249f0757bd479b03c77132b9e9ea2256cf59bb2c02d6e54f"
+  },
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": "openvino_vision_embeddings_model.bin",
+    "bytes": 169812532,
+    "sha256": "6c7609d984db75c39461f74b418cf3eac65b90da8678a08bc4e158e2f4524c3d"
+  },
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": "openvino_vision_embeddings_model.xml",
+    "bytes": 2028872,
+    "sha256": "c709b5d9e3a92c30077eddac9c11badd16cf427fb731c76c837c0c62c84350fc"
+  },
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": "preprocessor_config.json",
+    "bytes": 403,
+    "sha256": "12476d626b89e273a9b2c6a493a6319ab02427ebfcd3635d92b29584b27c7249"
+  },
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": "processor_config.json",
+    "bytes": 1689,
+    "sha256": "32bdf45d2ad4cc29a0822ddd157a182de76644f0419a6228d151495256e9813c"
+  },
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": "tokenizer.json",
+    "bytes": 32169626,
+    "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f"
+  },
+  {
+    "model": "gemma-4-E4B-it-int4-ov",
+    "file": "tokenizer_config.json",
+    "bytes": 2713,
+    "sha256": "d7859e99f4d4070b8fa563589decfdf7378f33cc7c6d2c2a38c7353c3eb3b092"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": ".cache/huggingface/.gitignore",
+    "bytes": 1,
+    "sha256": "684888c0ebb17f374298b65ee2807526c066094c701bcc7ebbe1c1095f494fc1"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": ".cache/huggingface/download/.gitattributes.metadata",
+    "bytes": 100,
+    "sha256": "0c8c0575604057315a2e4b62f6098043116e1238edf7058093a436a629a351b9"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": ".cache/huggingface/download/README.md.metadata",
+    "bytes": 100,
+    "sha256": "1e653862bba86e098b5b3c8376256f85bbdeed68663cb27b1fdc56ef38f653bc"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": ".cache/huggingface/download/chat_template.jinja.metadata",
+    "bytes": 101,
+    "sha256": "93869c53a1af2c19274441b50952469dbbd62950b36c2b5ee2b47861e9c93a3e"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": ".cache/huggingface/download/config.json.metadata",
+    "bytes": 101,
+    "sha256": "f6b56e1c301e573dddad5884ae64fd2f13536a9e91e10f1a5a4acda0dce566f1"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": ".cache/huggingface/download/generation_config.json.metadata",
+    "bytes": 101,
+    "sha256": "22436f66f5e1e8d5a17296c7541ce4633100b69e69b8d053b95d6da9c021a7e3"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": ".cache/huggingface/download/openvino_config.json.metadata",
+    "bytes": 101,
+    "sha256": "406b2a32b7c24cedc883fa91c9cf4650383151c7eba12fe1b1357ad780233937"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": ".cache/huggingface/download/openvino_detokenizer.bin.metadata",
+    "bytes": 125,
+    "sha256": "ff44545c365b081912a13f9469447e4c5d8521c6d3deae6bccdc5c49b6988562"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": ".cache/huggingface/download/openvino_detokenizer.xml.metadata",
+    "bytes": 101,
+    "sha256": "d184f23ae1045095102c42b52c0f47b688c435691e9a58da22441bd7f760f89f"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": ".cache/huggingface/download/openvino_language_model.bin.metadata",
+    "bytes": 125,
+    "sha256": "0bd701f506c37cc2118f22a18ffacfac6357fcf5354c40356f40ef43cf7ea510"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": ".cache/huggingface/download/openvino_language_model.xml.metadata",
+    "bytes": 101,
+    "sha256": "64d69f82df327041abcc4d45f0863e0be80cde98347005873616204273e134c6"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": ".cache/huggingface/download/openvino_text_embeddings_model.bin.metadata",
+    "bytes": 125,
+    "sha256": "bc8f6e96c6a785a7e7a62e83b4f624c25016d61fa2f8ca05fce7c22433d05612"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": ".cache/huggingface/download/openvino_text_embeddings_model.xml.metadata",
+    "bytes": 101,
+    "sha256": "b195570d1b4cd8352df7aa1675fa3057abc780499cc1b5d47e0a8ff0e25d9718"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": ".cache/huggingface/download/openvino_tokenizer.bin.metadata",
+    "bytes": 125,
+    "sha256": "198b275651c0fa1997b1a31dfaf7e05cb11a819ee29c0e7fb8a2f88453cbfdb5"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": ".cache/huggingface/download/openvino_tokenizer.xml.metadata",
+    "bytes": 101,
+    "sha256": "617985686a67bb1934864ac64a24e619d4279b8ee60921d720607b1e6f31ecce"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": ".cache/huggingface/download/openvino_vision_embeddings_model.bin.metadata",
+    "bytes": 125,
+    "sha256": "c408a394cfb4729765d2dbebda29c647163981cd3f463d4cd916e83078529114"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": ".cache/huggingface/download/openvino_vision_embeddings_model.xml.metadata",
+    "bytes": 101,
+    "sha256": "bc1169de0866552629a4d93feb063d286ba5b4d00fa941d6f59ab5ddd65aa852"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": ".cache/huggingface/download/preprocessor_config.json.metadata",
+    "bytes": 101,
+    "sha256": "06657cf791b39e87dd637c3c2f8652546af191774d12f4c3be217deb280e1bf7"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": ".cache/huggingface/download/processor_config.json.metadata",
+    "bytes": 101,
+    "sha256": "520150f682add2e2eec7fb878630e8e44017cee8e12f4528facf3c28419d3ba8"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": ".cache/huggingface/download/tokenizer.json.metadata",
+    "bytes": 125,
+    "sha256": "d9910e5a7e3609ef9fd72dfd8b747183f11db6f78c43c32d7dcf7216c079fbfe"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": ".cache/huggingface/download/tokenizer_config.json.metadata",
+    "bytes": 101,
+    "sha256": "534274a3545dd938b9c884ecc523f64a0c35a8b6276326070e35071e791dd0ee"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": ".gitattributes",
+    "bytes": 4780,
+    "sha256": "f5f5fe430077d26f692f815cebe9936de8eed742ab8991d529f955324dd49250"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": "README.md",
+    "bytes": 3270,
+    "sha256": "13256067c8c02a4c4f96ff3d3017a0ad539795ca93efac36d4f19392818b2661"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": "chat_template.jinja",
+    "bytes": 17828,
+    "sha256": "f36aaa3ddf70471ab2008c8e9a1c7b36e1019b63d7b025399b1e5fc228926381"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": "config.json",
+    "bytes": 4465,
+    "sha256": "d68bfc4e18409dda1859c93bd7076e86235028e082124289260d3bffba5e5258"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": "generation_config.json",
+    "bytes": 273,
+    "sha256": "83f613a6bd241786b96fd0f9568952d5b16bb136196d060e310640c6354722dc"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": "model.json",
+    "bytes": 182,
+    "sha256": "8f2dffc5d436b5488d88953b6ca092e6a0bbe84b47d05b43f13cfee6f18976d3"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": "openvino_config.json",
+    "bytes": 1291,
+    "sha256": "a3317086179858407643e35fefe267d6a5f19d6ca204ff3df048ac00cea24a9d"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": "openvino_detokenizer.bin",
+    "bytes": 4413547,
+    "sha256": "461919bda7b546453e903052588c578e3e94e9e8215b7cec07cb00cb97459d13"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": "openvino_detokenizer.xml",
+    "bytes": 28849,
+    "sha256": "9da0686d8296366302642a740acd070cbf2f39c81ca30fe0a3cca74c3f41b772"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": "openvino_language_model.bin",
+    "bytes": 7141660880,
+    "sha256": "37e4c354f256ca0856e9fff9aae2242fcc3aa7a1143c1c3278bc09f8d78df659"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": "openvino_language_model.xml",
+    "bytes": 5475879,
+    "sha256": "ec5150fab3ab505169845d5cd807983b37965dda572ef51ff8099b69e83212d8"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": "openvino_text_embeddings_model.bin",
+    "bytes": 1007157256,
+    "sha256": "d0ef016360189046e2b25e1821712b4dceb3cce2fde2a4e223242a391dc6614f"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": "openvino_text_embeddings_model.xml",
+    "bytes": 7275,
+    "sha256": "0c84bd7704667742eac1c9166944568085405240ddc5beda151967735521f908"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": "openvino_tokenizer.bin",
+    "bytes": 17270328,
+    "sha256": "d151f48d29ba9d22fdf0f071cd16cb68e5f8fba51a5489c3d2df8e29030e4a13"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": "openvino_tokenizer.xml",
+    "bytes": 44720,
+    "sha256": "64b88635f26028ca3335dfbf98c3922caea9f29d2eecb144fe92b1887cd4a0d8"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": "openvino_vision_embeddings_model.bin",
+    "bytes": 50041284,
+    "sha256": "709ae277e9e854418c03585083187daed2a91b06fcfcd33bbe50bb754494cf30"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": "openvino_vision_embeddings_model.xml",
+    "bytes": 37362,
+    "sha256": "1eaf9538b096afae972b74540e384fd102f3349b00930c95ebc5dc809e665be1"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": "preprocessor_config.json",
+    "bytes": 405,
+    "sha256": "5c0a0360de608ec3340e3d3b4165219f0579a6c58c2c27f2360914fbfa4b9b4f"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": "processor_config.json",
+    "bytes": 1444,
+    "sha256": "56634166d3ca9d76420de0de6fd4ee824a96ebdfee18cf879429d542f1975d26"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": "tokenizer.json",
+    "bytes": 32169626,
+    "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f"
+  },
+  {
+    "model": "gemma-4-12B-it-qat-int4-ov",
+    "file": "tokenizer_config.json",
+    "bytes": 2844,
+    "sha256": "cbe93d605d618d2808ff4e691487e4c539dd40f33faa6c4d8b35f8a30194a570"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/.gitignore",
+    "bytes": 1,
+    "sha256": "684888c0ebb17f374298b65ee2807526c066094c701bcc7ebbe1c1095f494fc1"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/CACHEDIR.TAG",
+    "bytes": 191,
+    "sha256": "f6572428f6d5e1575e73a1502895a8731f10757dfbb634909c6e154b849af91d"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/.gitattributes.metadata",
+    "bytes": 101,
+    "sha256": "08f521cac3375e39137361af3161eec633dbeda3eff78bec45876bd23a686534"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/chat_template.jinja.metadata",
+    "bytes": 101,
+    "sha256": "be91b994ea07c622d9ae4584ca832dab7e075e03098a7b6bd20c9ece966819f0"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/config.json.metadata",
+    "bytes": 101,
+    "sha256": "2495a31e88466a7440f484eb33d5976ffcddba4e95968f019b8f1fa86532ea70"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/generation_config.json.metadata",
+    "bytes": 101,
+    "sha256": "04bc316dfe8ce8ba202579060e5f8b397f9adc800ad88d5ac6fb85893b0004fc"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/openvino_config.json.metadata",
+    "bytes": 100,
+    "sha256": "979820ec0471d1b5a0ea2979cc5ec8c03a52c0b24b37a8f3b5f579c847d6d1b8"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/openvino_detokenizer.bin.metadata",
+    "bytes": 125,
+    "sha256": "ee15939ce25de946b521063358994cc040faff4f054e120f566a80124f4301ca"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/openvino_detokenizer.xml.metadata",
+    "bytes": 101,
+    "sha256": "1e20a3f4f2aeff03e923ccc0ca0a7890632a8ced74ce2ca9fb0b0d9106c55e03"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/openvino_language_model.bin.metadata",
+    "bytes": 125,
+    "sha256": "42843ef7de7514001b9f8cae73326c1cbf06859d102a78acbabdb0b101bef75e"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/openvino_language_model.xml.metadata",
+    "bytes": 100,
+    "sha256": "432a784b79e48430607f1bff9a5ba752664dd9fded689c76962a10e03cf17065"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/openvino_text_embeddings_model.bin.metadata",
+    "bytes": 125,
+    "sha256": "3660b1490a2bce9eaa374c78e437b2730585d5d78cb321d76607086ce99c7ec9"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/openvino_text_embeddings_model.xml.metadata",
+    "bytes": 101,
+    "sha256": "6f6709c1fc872788b1291f47eb477a51982687e46e4ae8ac1b4d33e9b22ee71b"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/openvino_tokenizer.bin.metadata",
+    "bytes": 125,
+    "sha256": "17d65901cbf7e370ae54d58480bfdbef5134e239fd8532e8661bb9a8889059a2"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/openvino_tokenizer.xml.metadata",
+    "bytes": 101,
+    "sha256": "a3751e5d23efa03478a5ce16902a5ae355f605c245aadd30819c53305028a913"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/openvino_vision_embeddings_merger_model.bin.metadata",
+    "bytes": 125,
+    "sha256": "80dee89c9fa99de0e81ed780377e7555c69586b6091c73320b33604120147e89"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/openvino_vision_embeddings_merger_model.xml.metadata",
+    "bytes": 101,
+    "sha256": "a56c081e9bb771b8938e7cd981abaf26f1b2928094b473a9428bba1f9f86c933"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/openvino_vision_embeddings_model.bin.metadata",
+    "bytes": 125,
+    "sha256": "47e8746fef8444c91385f2ebae765ef3f00336a08b80689eafe6a08f25e764de"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/openvino_vision_embeddings_model.xml.metadata",
+    "bytes": 101,
+    "sha256": "48bf74bdf782adaa2f1d6c383e9ba0e62ac74e82fd799b1a9418fb5168c75d29"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/openvino_vision_embeddings_pos_model.bin.metadata",
+    "bytes": 125,
+    "sha256": "55786d2a9ce143d5a2fc2723517dc3fa127dd6cfa73d79f5c5f77484b326054d"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/openvino_vision_embeddings_pos_model.xml.metadata",
+    "bytes": 101,
+    "sha256": "02282cabd4135548eddecd1cdf4ed10e1a72c98246aa4e9036845381e70f179a"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/preprocessor_config.json.metadata",
+    "bytes": 101,
+    "sha256": "462bae0045fd9e4f457f7db766cb7b17926d3cd4657b3e28785598e27deca149"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/processor_config.json.metadata",
+    "bytes": 101,
+    "sha256": "67f65e7d8d9dd37062d87713427d69d10ce2878cc9afb592a2f4b627e3327057"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/tokenizer.json.metadata",
+    "bytes": 125,
+    "sha256": "cbc34a623a6a42c6682aad111f209c6ea4c45b22f3f387cc827ee26d2db53dcf"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".cache/huggingface/download/tokenizer_config.json.metadata",
+    "bytes": 101,
+    "sha256": "648f4d12aa3f1ed448eac9cf404c802e50deb86abb7ae4fc456f29f9c352b643"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": ".gitattributes",
+    "bytes": 1570,
+    "sha256": "34448b82c17d60fec9b65b1f093c115ddbaadc04beb1b0140b6bfed2e012a930"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "chat_template.jinja",
+    "bytes": 7756,
+    "sha256": "a4aee8afcf2e0711942cf848899be66016f8d14a889ff9ede07bca099c28f715"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "config.json",
+    "bytes": 2824,
+    "sha256": "af4f4f61b79ba1653c62350210350528a75b57baf862d1235870600c0173fdab"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "generation_config.json",
+    "bytes": 115,
+    "sha256": "0c35bb39fbaed1ac0656baabc4f4e9bda20214e12336d0e4e8755aac1f487c2e"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "model.json",
+    "bytes": 159,
+    "sha256": "05d0ed7eb302b9854eecbd91321bfd6e9fc207a76c7dfb46b43d629084369b42"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "openvino_config.json",
+    "bytes": 1146,
+    "sha256": "e8d83f025df35b7c4285b5c6b4e39098a449cdfb945be3890c5d3ea9daf91d4b"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "openvino_detokenizer.bin",
+    "bytes": 3828184,
+    "sha256": "48fc2c6a7a1056994982911eb9695826acef933c3d742364c56d16317a0b2a79"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "openvino_detokenizer.xml",
+    "bytes": 15506,
+    "sha256": "640430f43aa9b9bc7ed861b99ab5376046c363d1faa1655a8be7da5dcc8b9c33"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "openvino_language_model.bin",
+    "bytes": 4969367882,
+    "sha256": "5050b005d6c00a64b28c52fb17e1b2a0937eba464bdbe940337af158efcb7ae0"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "openvino_language_model.xml",
+    "bytes": 5104216,
+    "sha256": "f9ee0b40412816e877a69c0b2e4c5c78d4a49e5f6e432cca2daad3eb3158266b"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "openvino_text_embeddings_model.bin",
+    "bytes": 1017615364,
+    "sha256": "fd80debc3c239af673f7dd2571e860b4a47dee2e4ef52b458fdfdef4195dfd06"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "openvino_text_embeddings_model.xml",
+    "bytes": 5820,
+    "sha256": "59e62e96576f156a00693925fccb8d33f4af835863914adc7a0380c3d0d652c7"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "openvino_tokenizer.bin",
+    "bytes": 9631154,
+    "sha256": "ea3fcce2251902efffbc774cbc8ffff69e981412347a1e510e430c6557a63701"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "openvino_tokenizer.xml",
+    "bytes": 32500,
+    "sha256": "8f6915bd82a56cb2a854d644680b3ae0aa5f4049a30e627e3687cdc84cc23363"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "openvino_vision_embeddings_merger_model.bin",
+    "bytes": 452807268,
+    "sha256": "8c66077016ce4536ce1e770c7cbbbe4064425893dcbd5f5824e3e8e7db5c0192"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "openvino_vision_embeddings_merger_model.xml",
+    "bytes": 1322753,
+    "sha256": "204062ad93b1b54bc12b3c0d7d2be4988a63a4fd236568dcf24a4c9dc46b42b0"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "openvino_vision_embeddings_model.bin",
+    "bytes": 1776440,
+    "sha256": "66936c63dab694787684fe353ff670d51dd55637c8889098c86ebfe8cd2cca8a"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "openvino_vision_embeddings_model.xml",
+    "bytes": 8577,
+    "sha256": "dd3c715b3017bada92cebc85f6e103a4c599d11803cdab51340fc80b0afe7765"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "openvino_vision_embeddings_pos_model.bin",
+    "bytes": 2658820,
+    "sha256": "247b5afc39524032d0a8b0b9657bb16d27d68d233c420811ee7d9ab5c7db4e9e"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "openvino_vision_embeddings_pos_model.xml",
+    "bytes": 5787,
+    "sha256": "976665a6a5418f19c1f1f32e7a3afdd82c20f110a9391e09e45ef1e5e07303c8"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "preprocessor_config.json",
+    "bytes": 482,
+    "sha256": "957eb01d1ea45341a92d543daec95857a7cbeff5803834bc0603b27ba7b41b3f"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "processor_config.json",
+    "bytes": 1300,
+    "sha256": "14932921ca485d458a04dafd8069fbb0a4505622a48208d19ed247115801385b"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "tokenizer.json",
+    "bytes": 19989343,
+    "sha256": "87a7830d63fcf43bf241c3c5242e96e62dd3fdc29224ca26fed8ea333db72de4"
+  },
+  {
+    "model": "Qwen3.5-9B-ov-awq",
+    "file": "tokenizer_config.json",
+    "bytes": 1140,
+    "sha256": "a4f52c2103a685c3d9f3022b3954246fbab865abd709ac69d8b8a98f79580564"
+  }
+]

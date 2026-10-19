@@ -1,0 +1,2444 @@
+#!/bin/bash
+# ============================================================================
+# illama - OpenVINO LLM Manager (Ollama-like CLI)
+# Version is sourced from the VERSION file installed alongside this script.
+# ============================================================================
+
+set -e
+
+# Configuration
+ILLAMA_HOME="${ILLAMA_HOME:-/opt/illama}"
+REGISTRY="${ILLAMA_HOME}/models"
+
+# Resolve the canonical version once at startup so every reference (banner,
+# image rollback target, etc.) agrees. Look first at $ILLAMA_HOME/VERSION
+# (where setup.sh installs it), then alongside this script (when run from
+# the repo without installing), then fall back to a sentinel.
+_resolve_illama_version() {
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || script_dir=""
+    local candidate
+    for candidate in "${ILLAMA_HOME}/VERSION" "${script_dir}/VERSION"; do
+        if [[ -n "$candidate" && -f "$candidate" ]]; then
+            tr -d '[:space:]' < "$candidate"
+            return 0
+        fi
+    done
+    echo "unknown"
+}
+ILLAMA_VERSION="$(_resolve_illama_version)"
+
+BUILDER_IMG="illama-builder:latest"
+RUNNER_IMG="illama-runner:latest"
+CONTAINER_NAME="illama-service"
+PORT="${ILLAMA_PORT:-11434}"
+# If ILLAMA_IDLE_TIMEOUT is unset, rely on server config (server.json) default.
+IDLE_TIMEOUT="${ILLAMA_IDLE_TIMEOUT:-}"
+DEVICE="${ILLAMA_DEVICE:-GPU}"
+API_KEY="${ILLAMA_API_KEY:-}"
+VERBOSE=0
+HEALTH_URL="http://localhost:${PORT}/illama/health"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+log() { echo -e "${BLUE}>>>${NC} $1"; }
+success() { echo -e "${GREEN}✅${NC} $1"; }
+warn() { echo -e "${YELLOW}⚠️${NC} $1"; }
+error() { echo -e "${RED}❌${NC} $1"; exit 1; }
+
+debug() {
+    if [[ $VERBOSE -eq 1 ]]; then
+        echo -e "${YELLOW}[DEBUG]${NC} $1"
+    fi
+}
+
+show_help() {
+    cat << EOF
+${GREEN}Illama${NC} - OpenVINO LLM Manager (v${ILLAMA_VERSION})
+
+${YELLOW}Usage:${NC}
+  illama [global-options] <command> [command-options]
+
+${YELLOW}Server Commands:${NC}
+  serve                    Start the inference server (OpenVINO GenAI runner)
+  stop                     Stop the inference server
+  ps                       Show server status and loaded models
+  logs [N]                 Tail server logs (default: 100 lines, follow)
+
+${YELLOW}Model Commands:${NC}
+  pull <repo|url>          Download & convert a HuggingFace model (accepts org/name or a full HF URL)
+  pull <repo> --draft <r>  Also fetch a draft model and link it (speculative decoding)
+  pull <repo> --auto-draft Find a matching drafter by publisher naming convention
+  pull <repo> --draft-type Force eagle3 | dflash | auto (default: auto, tries both)
+  link <target> <draft>    Link an existing draft model for speculative decoding
+  unlink <target>          Remove a draft-model link
+  search [query] [--vlm]   Browse the HuggingFace OpenVINO model index and optionally pull
+  list [--verbose]         List available models in registry (with optional stats)
+  rm <model> [--force]     Remove a model from registry (--force unloads first if loaded)
+  show <model>             Show model information
+
+${YELLOW}Inference Commands:${NC}
+  run <model> [prompt]     Interactive chat (no prompt) or single-shot query
+  run <model> -p "prompt"  Explicit single-shot query
+  run <model> --stream     Force streaming output
+  run <model> --no-stream  Force non-streaming output
+  bench [args...]          Benchmark all/selected models via the OpenAI API
+
+${YELLOW}Maintenance Commands:${NC}
+  prune builder            Remove the conversion builder image (~5 GB)
+  gc [--dry-run] [--force] Reclaim disk: prune HF cache + broken model dirs
+  doctor                   Run host / runtime health checks (no changes)
+
+${YELLOW}Options:${NC}
+  --verbose, -v            Enable verbose logging for any command
+  --help, -h               Show this help message
+  version                  Show version information
+
+${YELLOW}Environment Variables:${NC}
+  ILLAMA_HOME              Base directory (default: /opt/illama)
+  ILLAMA_PORT              Server port (default: 11434)
+  ILLAMA_DEVICE            Inference device (GPU or CPU, default: GPU)
+  ILLAMA_IDLE_TIMEOUT      Idle unload timeout (e.g. 300, 300s, 5m; 0 = disabled)
+  ILLAMA_API_KEY           Optional bearer token for runner auth
+
+${YELLOW}Examples:${NC}
+  illama pull Qwen/Qwen2.5-7B-Instruct
+  illama pull https://huggingface.co/OpenVINO/Phi-4-int4-ov   # Full HF URL works too
+  illama search gemma --vlm                   # Browse Gemma vision models on HF, pick to pull
+  illama serve
+  illama list --verbose
+  illama run Qwen2.5-7B-Instruct              # Interactive chat
+  illama run Qwen2.5-7B-Instruct -p "Hello!"  # Single response with stats
+  illama run Qwen2.5-7B-Instruct --stream     # Stream output live in terminal
+  ILLAMA_IDLE_TIMEOUT=5m illama serve         # Auto-unload model after 5 minutes idle
+
+EOF
+}
+
+cleanup_cache() {
+    # Clean up HuggingFace cache to free disk space
+    local cache_dir="${REGISTRY}/.cache"
+    
+    if [[ -d "$cache_dir" ]]; then
+        local cache_size=$(du -sh "$cache_dir" 2>/dev/null | cut -f1)
+        log "🧹 Cleaning up cache ($cache_size)..."
+        sudo rm -rf "$cache_dir"
+        success "Cache cleaned!"
+    fi
+}
+
+ensure_model_dir_writable() {
+    local model_dir="$1"
+    if [[ ! -d "$model_dir" ]]; then
+        return 0
+    fi
+
+    if [[ -w "$model_dir" ]]; then
+        return 0
+    fi
+
+    debug "Adjusting ownership for $model_dir"
+    sudo chown -R "$USER":"$USER" "$model_dir" 2>/dev/null || true
+}
+
+write_metadata() {
+    # Create or update a small JSON metadata file for a model directory.
+    # Args:
+    #   $1 = model directory path
+    #   $2 = HuggingFace repo id (e.g. Qwen/Qwen2.5-7B-Instruct)
+    #   $3 = source type (e.g. "preconverted-openvino" or "converted-openvino")
+    local model_dir="$1"
+    local repo_id="$2"
+    local source_type="$3"
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        debug "python3 not available, skipping metadata for $model_dir"
+        return 0
+    fi
+
+    if ! MODEL_DIR="$model_dir" REPO_ID="$repo_id" SOURCE_TYPE="$source_type" python3 - <<'PY'
+import json, os, time
+
+model_dir = os.environ.get("MODEL_DIR", "")
+repo_id = os.environ.get("REPO_ID", "")
+source_type = os.environ.get("SOURCE_TYPE", "")
+
+if not model_dir:
+    raise SystemExit(0)
+
+meta_path = os.path.join(model_dir, "model.json")
+data = {
+    "repo_id": repo_id,
+    "model_name": os.path.basename(model_dir.rstrip(os.sep)),
+    "source": source_type or "unknown",
+    "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+}
+
+# Best-effort merge with any existing metadata
+try:
+    if os.path.exists(meta_path):
+        with open(meta_path, "r", encoding="utf-8") as f:
+            existing = json.load(f)
+        if isinstance(existing, dict):
+            existing.update(data)
+            data = existing
+except Exception:
+    pass
+
+os.makedirs(model_dir, exist_ok=True)
+with open(meta_path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2, sort_keys=True)
+PY
+    then
+        warn "Unable to write model.json metadata for $(basename "$model_dir"); files may be owned by root"
+    fi
+}
+
+wait_for_health() {
+    local max_attempts="${1:-30}"
+    local attempt=1
+
+    while [[ $attempt -le $max_attempts ]]; do
+        if curl_api -fsS "$HEALTH_URL" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+
+    return 1
+}
+
+curl_api() {
+    if [[ -n "$API_KEY" ]]; then
+        curl "$@" -H "Authorization: Bearer $API_KEY"
+    else
+        curl "$@"
+    fi
+}
+
+# Validate that a string is safe to use as a model directory name under
+# REGISTRY. Rejects path traversal, absolute paths, hidden dirs, and any
+# character outside [A-Za-z0-9._-]. Exits with an error on rejection.
+_validate_safe_model_name() {
+    local name="$1"
+    if [[ -z "$name" ]]; then
+        error "Model name cannot be empty"
+    fi
+    if [[ "$name" == *"/"* ]] \
+        || [[ "$name" == *".."* ]] \
+        || [[ "$name" == .* ]] \
+        || [[ "$name" == -* ]]; then
+        error "Invalid model name '$name' (must not contain '/' or '..', or start with '.' or '-')"
+    fi
+    if [[ ! "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        error "Invalid model name '$name' (allowed: A-Z a-z 0-9 . _ -)"
+    fi
+}
+
+# Normalize a user-supplied HuggingFace identifier into the canonical
+# `org/name` form that snapshot_download / optimum-cli expect.
+#
+# Accepts:
+#   - Already-canonical IDs:               OpenVINO/Phi-4-int4-ov
+#   - Bare names:                          mistralai (rare; HF treats as namespace listing)
+#   - Full HF URLs:                        https://huggingface.co/OpenVINO/Phi-4-int4-ov
+#                                          http://huggingface.co/OpenVINO/Phi-4-int4-ov/
+#   - URLs with ref / file paths:          https://huggingface.co/OpenVINO/Phi-4-int4-ov/tree/main
+#                                          https://huggingface.co/OpenVINO/Phi-4-int4-ov/blob/main/README.md
+#   - hf://-style URIs:                    hf://OpenVINO/Phi-4-int4-ov
+#
+# Anything we cannot recognise is returned unchanged so the regex check
+# downstream produces a meaningful error message.
+_normalize_hf_repo_input() {
+    local input="$1"
+    local repo="$input"
+
+    # 1. Strip the hf:// prefix if present.
+    repo="${repo#hf://}"
+
+    # 2. Strip http(s)://huggingface.co/ (and the rare www. variant).
+    repo="${repo#https://huggingface.co/}"
+    repo="${repo#http://huggingface.co/}"
+    repo="${repo#https://www.huggingface.co/}"
+    repo="${repo#http://www.huggingface.co/}"
+
+    # 3. Drop any trailing slashes.
+    while [[ "$repo" == */ ]]; do
+        repo="${repo%/}"
+    done
+
+    # 4. Cut anything after the second slash (HF URLs append /tree/<ref>,
+    #    /blob/<ref>/<path>, /resolve/<ref>/<path>, /commit/<sha>, etc).
+    if [[ "$repo" == */* ]]; then
+        local org="${repo%%/*}"
+        local rest="${repo#*/}"
+        local name="${rest%%/*}"
+        repo="${org}/${name}"
+    fi
+
+    # 5. Drop a query string or fragment if the user pasted one.
+    repo="${repo%%\?*}"
+    repo="${repo%%#*}"
+
+    if [[ "$repo" != "$input" ]]; then
+        debug "Normalized HF input '$input' -> '$repo'"
+    fi
+    printf '%s' "$repo"
+}
+
+# Validate a HuggingFace repo id. Accepts 'org/name' or bare 'name', with
+# the same character set HuggingFace allows for namespaces and repos.
+_validate_hf_repo_id() {
+    local repo="$1"
+    if [[ -z "$repo" ]]; then
+        error "HuggingFace repo id cannot be empty"
+    fi
+    if [[ ! "$repo" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?$ ]]; then
+        error "Invalid HuggingFace repo id '$repo' (expected 'org/name' or 'name'; allowed chars: A-Z a-z 0-9 . _ -). Tip: 'illama pull' also accepts a full https://huggingface.co/<org>/<name> URL."
+    fi
+}
+
+# Decide whether a HuggingFace repo points at a pre-converted OpenVINO model.
+# Returns 0 (true) or 1 (false). The previous implementation matched any
+# substring '-ov' which falsely flagged things like 'phi-3-overview'; this
+# version requires '-ov' / '_ov' to sit on a token boundary.
+_is_preconverted_repo() {
+    local repo="$1"
+    local repo_lower
+    repo_lower=$(printf '%s' "$repo" | tr '[:upper:]' '[:lower:]')
+
+    # Explicit OpenVINO org
+    if [[ "$repo" == OpenVINO/* ]]; then
+        return 0
+    fi
+    # 'openvino' substring anywhere
+    if [[ "$repo_lower" == *openvino* ]]; then
+        return 0
+    fi
+    # '-ov' or '_ov' as a token (not as a substring of 'overview', etc.)
+    if [[ "$repo_lower" =~ (^|[/_-])ov($|[/_-]) ]]; then
+        return 0
+    fi
+    return 1
+}
+
+# True if a model directory has a usable OpenVINO model file. Returns 0/1.
+_model_dir_has_artifact() {
+    local model_dir="$1"
+    if [[ ! -d "$model_dir" ]]; then
+        return 1
+    fi
+    if [[ -f "${model_dir}/openvino_model.xml" ]] \
+        || [[ -f "${model_dir}/openvino_language_model.xml" ]]; then
+        return 0
+    fi
+    return 1
+}
+
+# Best-effort partial-download cleanup. Used when an `illama pull` errors
+# out so a subsequent retry doesn't merge into a corrupted half-tree.
+_remove_partial_model_dir() {
+    local model_dir="$1"
+    if [[ ! -d "$model_dir" ]]; then
+        return 0
+    fi
+    warn "Cleaning up partial download at $model_dir to keep retries clean..."
+    sudo rm -rf "$model_dir" 2>/dev/null || rm -rf "$model_dir" 2>/dev/null || true
+}
+
+# ============================================================================
+# Commands
+# ============================================================================
+
+cmd_serve() {
+    if [[ -n $(docker ps -q -f name="^${CONTAINER_NAME}$") ]]; then
+        warn "Service is already running."
+        docker ps -f name="^${CONTAINER_NAME}$" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+        return 0
+    fi
+
+    # Remove any stopped/exited container with the same name so docker run can reuse it.
+    if [[ -n $(docker ps -aq -f name="^${CONTAINER_NAME}$") ]]; then
+        debug "Removing stale container $CONTAINER_NAME"
+        docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    fi
+
+    log "Starting Illama Service on port $PORT..."
+    
+    # Get group IDs for GPU access (groups may not exist in container)
+    VIDEO_GID=$(getent group video 2>/dev/null | cut -d: -f3 || echo "44")
+    RENDER_GID=$(getent group render 2>/dev/null | cut -d: -f3 || echo "")
+    
+    # Build group-add arguments
+    GROUP_ARGS="--group-add $VIDEO_GID"
+    if [[ -n "$RENDER_GID" ]]; then
+        GROUP_ARGS="$GROUP_ARGS --group-add $RENDER_GID"
+    fi
+    
+    # Optional idle-timeout override via env
+    local idle_env=()
+    if [[ -n "$IDLE_TIMEOUT" ]]; then
+        idle_env+=(-e "ILLAMA_IDLE_TIMEOUT=$IDLE_TIMEOUT")
+    fi
+    if [[ -n "$API_KEY" ]]; then
+        idle_env+=(-e "ILLAMA_API_KEY=$API_KEY")
+    fi
+    
+    docker run -d --restart unless-stopped \
+        --name "$CONTAINER_NAME" \
+        --device /dev/dri \
+        $GROUP_ARGS \
+        -v "$REGISTRY":/models:ro \
+        -v "${ILLAMA_HOME}/config":/config:ro \
+        -v "${ILLAMA_HOME}/cache":/cache \
+        -e ILLAMA_MODELS=/models \
+        -e ILLAMA_PORT=8000 \
+        -e ILLAMA_DEVICE="$DEVICE" \
+        "${idle_env[@]}" \
+        -p "$PORT":8000 \
+        "$RUNNER_IMG"
+
+    if ! wait_for_health 30; then
+        docker logs "$CONTAINER_NAME" 2>/dev/null || true
+        error "Service did not become healthy within 30 seconds."
+    fi
+
+    success "Service started! API available at http://localhost:$PORT/v1"
+    echo ""
+    echo "OpenWebUI connection:"
+    echo "  API Base URL: http://$(hostname -I | awk '{print $1}'):$PORT/v1"
+    if [[ -n "$API_KEY" ]]; then
+        echo "  API Key: configured (use your ILLAMA_API_KEY value)"
+    else
+        echo "  API Key: (leave empty)"
+    fi
+}
+
+cmd_stop() {
+    if [[ -z $(docker ps -q -f name="^${CONTAINER_NAME}$") ]]; then
+        warn "Service is not running."
+        # Still clean up an exited container so the name is free for the next serve.
+        if [[ -n $(docker ps -aq -f name="^${CONTAINER_NAME}$") ]]; then
+            docker rm "$CONTAINER_NAME" >/dev/null 2>&1 || true
+        fi
+        return 0
+    fi
+
+    log "Stopping Illama Service..."
+    docker stop "$CONTAINER_NAME" >/dev/null
+    docker rm "$CONTAINER_NAME" >/dev/null 2>&1 || true
+
+    success "Service stopped."
+}
+
+cmd_ps() {
+    echo ""
+    echo "=== Illama Service Status ==="
+
+    if [[ -n $(docker ps -q -f name="^${CONTAINER_NAME}$") ]]; then
+        echo -e "Status: ${GREEN}Running${NC}"
+        docker ps -f name="^${CONTAINER_NAME}$" --format "Container: {{.Names}}\nUptime: {{.Status}}\nPorts: {{.Ports}}"
+        
+        echo ""
+        echo "=== Runner Health ==="
+        curl_api -s "$HEALTH_URL" 2>/dev/null | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    print(f\"Loaded model: {data.get('loaded_model') or 'none'}\")
+    print(f\"Device: {data.get('device', 'unknown')}\")
+    print(f\"Idle timeout: {data.get('idle_timeout_seconds', 'unknown')}s\")
+    print(f\"Active generations: {data.get('active_generations', 0)}\")
+    print(f\"Auth enabled: {data.get('auth_enabled', False)}\")
+    print(f\"Load failure policy: {data.get('load_failure_policy', 'unknown')}\")
+    print(\"Available models:\")
+    for model in data.get('available_models', []):
+        print(f\"  - {model}\")
+except:
+    print('  (unable to fetch runner health)')
+" || echo "  (unable to connect to server)"
+    else
+        echo -e "Status: ${RED}Stopped${NC}"
+    fi
+    echo ""
+}
+
+# ============================================================================
+# Speculative-decoding links (target model -> draft model)
+# ============================================================================
+#
+# A draft model is a normal registry entry; the association lives in the
+# TARGET's model.json under overrides.draft_model. The runner reads it at load
+# time and constructs the pipeline with ov_genai.draft_model(). See
+# docs/b50-model-notes.md for measured speedups (2.5x on Qwen3-8B).
+
+# Print the space-separated kinds of weight files a repo publishes, one of
+# more of: safetensors pytorch-bin openvino gguf. Empty when unreachable.
+#
+# Used as a pre-flight check: a GGUF-only repo cannot be converted by
+# optimum-cli, and without this check the failure surfaces late and
+# unhelpfully as "The library name could not be automatically inferred"
+# after the download has already run.
+_hf_repo_file_kinds() {
+    local repo="$1"
+    local json
+    # NOTE: do NOT pipe curl into `python3 - <<'PY'`. A heredoc replaces
+    # stdin, so Python reads the *script* from stdin and the piped JSON is
+    # discarded - the function then silently returns nothing. Capture first
+    # and hand the payload over via the environment instead.
+    json=$(curl -s ${HF_TOKEN:+-H "Authorization: Bearer $HF_TOKEN"} \
+        "https://huggingface.co/api/models/${repo}" 2>/dev/null) || return 0
+    [[ -n "$json" ]] || return 0
+    HF_JSON="$json" python3 - <<'PY' 2>/dev/null || true
+import json, os
+try:
+    data = json.loads(os.environ.get("HF_JSON", ""))
+except Exception:
+    raise SystemExit(0)
+kinds = set()
+for sibling in data.get("siblings", []) or []:
+    name = sibling.get("rfilename", "")
+    if name.endswith(".safetensors"):
+        kinds.add("safetensors")
+    elif name.endswith(".gguf"):
+        kinds.add("gguf")
+    elif name.endswith(".xml") and "openvino" in name:
+        kinds.add("openvino")
+    elif name.endswith(".bin") and "openvino" not in name:
+        kinds.add("pytorch-bin")
+print(" ".join(sorted(kinds)))
+PY
+}
+
+# Print the repo id named by a repo's `base_model:` tag, if it has one.
+#
+# The tag means "derived from", not "is a drafter for" - Qwen/Qwen3-14B
+# carries base_model:Qwen/Qwen3-14B-Base, for instance. It only means
+# "target model" in the context of a draft head, so this is called solely
+# from the _is_draft_repo branch.
+#
+# Not every publisher sets it - AngelSlim and circulus do not - so callers
+# must fall back to the naming convention.
+_hf_repo_base_model() {
+    local repo="$1"
+    local json
+    # Same stdin caveat as _hf_repo_file_kinds - see the note there.
+    json=$(curl -s ${HF_TOKEN:+-H "Authorization: Bearer $HF_TOKEN"} \
+        "https://huggingface.co/api/models/${repo}" 2>/dev/null) || return 0
+    [[ -n "$json" ]] || return 0
+    HF_JSON="$json" python3 - <<'PY' 2>/dev/null || true
+import json, os
+try:
+    data = json.loads(os.environ.get("HF_JSON", ""))
+except Exception:
+    raise SystemExit(0)
+for tag in data.get("tags", []) or []:
+    if not tag.startswith("base_model:"):
+        continue
+    value = tag.split(":", 1)[1]
+    # Skip the qualified forms (base_model:quantized:X, base_model:finetune:X)
+    # - they point at intermediate artifacts, not the target we want.
+    if ":" in value:
+        continue
+    print(value)
+    break
+PY
+}
+
+# True (0) if a HuggingFace repo id exists and is reachable.
+_hf_repo_exists() {
+    local repo="$1"
+    local code
+    code=$(curl -s -o /dev/null -w '%{http_code}' \
+        ${HF_TOKEN:+-H "Authorization: Bearer $HF_TOKEN"} \
+        "https://huggingface.co/api/models/${repo}" 2>/dev/null) || return 1
+    [[ "$code" == "200" ]]
+}
+
+# Derive candidate draft-model repo ids from a base repo id, newline separated,
+# best first.
+#
+# Publishers that ship pre-converted OpenVINO pairs use a deterministic naming
+# convention, e.g. for circulus:
+#
+#   base    circulus/Qwen3.5-9B-ov-awq        (or -ov-int4)
+#   eagle3  circulus/Qwen3.5-9B-eagle3-ov-int4
+#   dflash  circulus/Qwen3.5-9B-DFlash-ov-int4
+#
+# so the stem ("Qwen3.5-9B") is recoverable by stripping the quantisation
+# suffix, and the drafters are just different suffixes on the same stem. This
+# avoids the two-manual-exports dance entirely when such a pair exists.
+_derive_draft_candidates() {
+    local repo="$1"
+    local prefer="${2:-auto}"
+    local org="${repo%%/*}"
+    local name="${repo#*/}"
+
+    # Strip the trailing OpenVINO/quantisation suffix to get the model stem.
+    local stem="$name"
+    stem="${stem%-ov-awq}"
+    stem="${stem%-ov-int4}"
+    stem="${stem%-ov-int8}"
+    stem="${stem%-ov-sym-int4}"
+    stem="${stem%-int4-ov}"
+    stem="${stem%-int8-ov}"
+    stem="${stem%-ov}"
+
+    # "auto" tries EAGLE-3 first only because that is the variant measured on
+    # this hardware (2.5x on Qwen3-8B) - NOT because DFlash is worse. DFlash
+    # has been equally supported since openvino-genai PR #3938 (2026-07-22)
+    # and may well win for a given model. Use --draft-type to force either.
+    case "$prefer" in
+        eagle3)
+            printf '%s/%s-eagle3-ov-int4\n' "$org" "$stem"
+            ;;
+        dflash)
+            printf '%s/%s-DFlash-ov-int4\n' "$org" "$stem"
+            ;;
+        *)
+            printf '%s/%s-eagle3-ov-int4\n' "$org" "$stem"
+            printf '%s/%s-DFlash-ov-int4\n' "$org" "$stem"
+            ;;
+    esac
+}
+
+# True (0) if a repo id looks like a speculative-decoding draft model.
+_is_draft_repo() {
+    local name="${1#*/}"
+    local low="${name,,}"
+    [[ "$low" == *-eagle3-* || "$low" == *_eagle3 || "$low" == *-dflash-* ]]
+}
+
+# Derive candidate BASE repo ids from a draft repo id, newline separated.
+# The inverse of _derive_draft_candidates: given
+#   circulus/Qwen3.5-9B-DFlash-ov-int4
+# produce
+#   circulus/Qwen3.5-9B-ov-awq
+#   circulus/Qwen3.5-9B-ov-int4
+# so that pulling a drafter can provision and link its base automatically.
+_derive_base_candidates() {
+    local repo="$1"
+    local org="${repo%%/*}"
+    local name="${repo#*/}"
+
+    # Strip the drafter marker and any trailing quantisation suffix.
+    local stem="$name"
+    stem="${stem%-ov-int4}"
+    stem="${stem%-ov-awq}"
+    stem="${stem%-ov-int8}"
+    stem="${stem%_eagle3}"
+    stem="${stem%-eagle3}"
+    stem="${stem%-DFlash}"
+    stem="${stem%-dflash}"
+    # Handle the infix forms (…-eagle3-ov-int4 already trimmed to …-eagle3).
+    stem="${stem%-eagle3}"
+    stem="${stem%-DFlash}"
+    stem="${stem%-dflash}"
+
+    printf '%s/%s-ov-awq\n' "$org" "$stem"
+    printf '%s/%s-ov-int4\n' "$org" "$stem"
+    printf '%s/%s-int4-ov\n' "$org" "$stem"
+}
+
+# Record the reverse pointer on a draft model so the runner can serve
+# "<name>" as an alias for "<base> + this draft".
+_write_base_link() {
+    local draft_dir="$1"
+    local base_name="$2"
+
+    MODEL_DIR="$draft_dir" BASE="$base_name" python3 - <<'PY'
+import json, os
+
+meta_path = os.path.join(os.environ["MODEL_DIR"], "model.json")
+base = os.environ.get("BASE", "")
+
+data = {}
+if os.path.exists(meta_path):
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        if isinstance(loaded, dict):
+            data = loaded
+    except Exception:
+        pass
+
+if base:
+    data["role"] = "draft"
+    data["base_model"] = base
+else:
+    data.pop("role", None)
+    data.pop("base_model", None)
+
+with open(meta_path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2, sort_keys=True)
+PY
+}
+
+# Print the base model $1 is a draft head for, or nothing if it isn't one.
+_model_base_name() {
+    local model="$1"
+    local meta="${REGISTRY}/${model}/model.json"
+    [[ -f "$meta" ]] || return 0
+    python3 - "$meta" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if str(data.get("role", "")).strip().lower() == "draft":
+        value = data.get("base_model")
+        if isinstance(value, str) and value.strip():
+            print(value.strip())
+except Exception:
+    pass
+PY
+}
+
+# Print the draft model linked to $1, or nothing when unlinked.
+_model_draft_name() {
+    local model="$1"
+    local meta="${REGISTRY}/${model}/model.json"
+    [[ -f "$meta" ]] || return 0
+    python3 - "$meta" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as f:
+        data = json.load(f)
+    value = (data.get("overrides") or {}).get("draft_model")
+    if isinstance(value, str) and value.strip():
+        print(value.strip())
+except Exception:
+    pass
+PY
+}
+
+# Write (or clear) overrides.draft_model on a target's model.json.
+# Args: target_dir, draft_name ("" clears), num_assistant_tokens ("" leaves as-is)
+_write_draft_link() {
+    local target_dir="$1"
+    local draft_name="$2"
+    local assistant_tokens="$3"
+
+    MODEL_DIR="$target_dir" DRAFT="$draft_name" NAT="$assistant_tokens" python3 - <<'PY'
+import json, os
+
+meta_path = os.path.join(os.environ["MODEL_DIR"], "model.json")
+draft = os.environ.get("DRAFT", "")
+nat = os.environ.get("NAT", "")
+
+data = {}
+if os.path.exists(meta_path):
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        if isinstance(loaded, dict):
+            data = loaded
+    except Exception:
+        pass
+
+overrides = data.get("overrides")
+if not isinstance(overrides, dict):
+    overrides = {}
+
+if draft:
+    overrides["draft_model"] = draft
+    if nat:
+        try:
+            overrides["num_assistant_tokens"] = int(nat)
+        except ValueError:
+            pass
+else:
+    overrides.pop("draft_model", None)
+    overrides.pop("num_assistant_tokens", None)
+
+if overrides:
+    data["overrides"] = overrides
+else:
+    data.pop("overrides", None)
+
+with open(meta_path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2, sort_keys=True)
+PY
+}
+
+cmd_link() {
+    local target="$1"
+    local draft="$2"
+    local assistant_tokens="${3:-4}"
+
+    if [[ -z "$target" || -z "$draft" ]]; then
+        error "Usage: illama link <target-model> <draft-model> [num_assistant_tokens]
+
+Links a draft model to a target for EAGLE-3 / speculative decoding.
+Both must already be in the registry (see 'illama list').
+
+Example:
+  illama pull Qwen/Qwen3-8B --draft AngelSlim/Qwen3-8B_eagle3
+  illama link Qwen3-8B-int4-ov Qwen3-8B-eagle3-ov 4"
+    fi
+
+    _validate_safe_model_name "$target"
+    _validate_safe_model_name "$draft"
+
+    local target_dir="${REGISTRY}/${target}"
+    local draft_dir="${REGISTRY}/${draft}"
+
+    [[ -d "$target_dir" ]] || error "Target model not found: $target"
+    [[ -d "$draft_dir" ]]  || error "Draft model not found: $draft"
+
+    # ov_genai.draft_model() loads a plain LLM IR; a VLM-shaped export
+    # (openvino_language_model.xml) fails deep in the OpenVINO frontend.
+    if [[ ! -f "${draft_dir}/openvino_model.xml" ]]; then
+        if [[ -f "${draft_dir}/openvino_language_model.xml" ]]; then
+            error "'$draft' is a VLM-shaped export (openvino_language_model.xml).
+Speculative decoding needs a text-only draft containing openvino_model.xml."
+        fi
+        error "'$draft' has no openvino_model.xml; it is not a usable draft model."
+    fi
+
+    _write_draft_link "$target_dir" "$draft" "$assistant_tokens"
+    _write_base_link "$draft_dir" "$target"
+    success "Linked: $target  <->  draft=$draft (num_assistant_tokens=$assistant_tokens)"
+    log "Request either name; illama serves base+draft for both."
+    log "Reload to apply:  curl -s -X POST http://localhost:${PORT}/v1/unload"
+}
+
+cmd_unlink() {
+    local target="$1"
+
+    if [[ -z "$target" ]]; then
+        error "Usage: illama unlink <target-model>"
+    fi
+    _validate_safe_model_name "$target"
+
+    local target_dir="${REGISTRY}/${target}"
+    [[ -d "$target_dir" ]] || error "Model not found: $target"
+
+    local current
+    current="$(_model_draft_name "$target" | head -n 1)"
+    if [[ -z "$current" ]]; then
+        warn "'$target' has no draft model linked."
+        return 0
+    fi
+
+    _write_draft_link "$target_dir" "" ""
+    # Clear the reverse pointer too, so the drafter stops advertising itself
+    # as an alias for a base it is no longer attached to.
+    if [[ -d "${REGISTRY}/${current}" ]]; then
+        _write_base_link "${REGISTRY}/${current}" ""
+    fi
+    success "Unlinked draft '$current' from $target"
+    log "Reload to apply:  curl -s -X POST http://localhost:${PORT}/v1/unload"
+}
+
+cmd_pull() {
+    # Flags:
+    #   --draft <repo>   also fetch this repo as a speculative-decoding draft
+    #                    model and link it to the target on success
+    #   --task <task>    optimum-cli --task override (draft models need
+    #                    text-generation-with-past)
+    local raw=""
+    local draft_repo=""
+    local task_override=""
+    local library_override=""
+    local assistant_tokens=4
+    local auto_draft=0
+    local draft_type="auto"
+    local no_base=0
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --draft)
+                draft_repo="${2:-}"
+                [[ -n "$draft_repo" ]] || error "--draft requires a repo id"
+                shift 2
+                ;;
+            --auto-draft)
+                auto_draft=1
+                shift
+                ;;
+            --no-base)
+                # Internal: set on the recursive call that pulls a base model,
+                # so provisioning cannot recurse back into itself.
+                no_base=1
+                shift
+                ;;
+            --draft-type)
+                draft_type="${2:-auto}"
+                case "$draft_type" in
+                    auto|eagle3|dflash) ;;
+                    *) error "--draft-type must be one of: auto, eagle3, dflash" ;;
+                esac
+                auto_draft=1
+                shift 2
+                ;;
+            --task)
+                task_override="${2:-}"
+                [[ -n "$task_override" ]] || error "--task requires a value"
+                shift 2
+                ;;
+            --library)
+                library_override="${2:-}"
+                [[ -n "$library_override" ]] || error "--library requires a value"
+                shift 2
+                ;;
+            --num-assistant-tokens)
+                assistant_tokens="${2:-4}"
+                shift 2
+                ;;
+            -*)
+                error "Unknown pull flag: $1. Try 'illama pull --help'."
+                ;;
+            *)
+                [[ -z "$raw" ]] && raw="$1" || error "Unexpected argument: $1"
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$raw" ]]; then
+        error "Usage: illama pull <huggingface_repo_or_url> [--draft <repo>] [--task <task>]
+
+Examples:
+  illama pull OpenVINO/Phi-4-int4-ov
+  illama pull https://huggingface.co/OpenVINO/Phi-4-int4-ov
+
+  # Target + EAGLE-3 draft in one step (2.5x throughput on Qwen3-8B):
+  illama pull Qwen/Qwen3-8B --draft AngelSlim/Qwen3-8B_eagle3"
+    fi
+
+    local repo
+    repo=$(_normalize_hf_repo_input "$raw")
+    _validate_hf_repo_id "$repo"
+
+    # Pre-flight: refuse repos we provably cannot use, before spending a
+    # multi-GB download on them. A GGUF-only repo has no safetensors/bin for
+    # optimum-cli to trace and no OpenVINO IR to copy, and fails late with
+    # "The library name could not be automatically inferred".
+    local repo_kinds
+    repo_kinds="$(_hf_repo_file_kinds "$repo")"
+    if [[ -n "$repo_kinds" && "$repo_kinds" == "gguf" ]]; then
+        error "'$repo' publishes only GGUF files.
+
+illama needs either an OpenVINO IR export or PyTorch weights
+(safetensors / .bin) it can convert. GGUF is a llama.cpp format and
+optimum-cli cannot read it.
+
+Look for a safetensors version of the same model, or an OpenVINO
+conversion (often under the OpenVINO/ or circulus/ orgs)."
+    fi
+
+    # --auto-draft: probe the publisher's conventional drafter names and use
+    # the first that actually exists on the Hub.
+    if [[ $auto_draft -eq 1 && -z "$draft_repo" ]]; then
+        log "Looking for a matching draft model for $repo..."
+        local candidate
+        while read -r candidate; do
+            [[ -n "$candidate" ]] || continue
+            debug "probing $candidate"
+            if _hf_repo_exists "$candidate"; then
+                draft_repo="$candidate"
+                success "Found draft model: $draft_repo"
+                break
+            fi
+        done < <(_derive_draft_candidates "$repo" "$draft_type")
+        if [[ -z "$draft_repo" ]]; then
+            warn "No matching draft model found for $repo; pulling target only."
+            _derive_draft_candidates "$repo" "$draft_type" | sed 's/^/    tried: /'
+        fi
+    fi
+
+    local model_name
+    model_name=$(basename "$repo")
+    _validate_safe_model_name "$model_name"
+
+    local target_dir="${REGISTRY}/${model_name}"
+
+    # Existing-target handling. We distinguish three states:
+    #   1. complete (has openvino_model.xml or openvino_language_model.xml)
+    #      -> prompt for overwrite
+    #   2. partial (directory exists but no model file)
+    #      -> auto-clean before retry; prevents the "corrupted retry" footgun
+    #         where a half-finished snapshot_download interleaves with a fresh one
+    #   3. absent -> nothing to do
+    if [[ -d "$target_dir" ]]; then
+        if _model_dir_has_artifact "$target_dir"; then
+            warn "Model '$model_name' already exists."
+            read -p "Overwrite? [y/N]: " confirm
+            if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+                return 0
+            fi
+            sudo rm -rf "$target_dir" 2>/dev/null || rm -rf "$target_dir"
+        else
+            warn "Found incomplete '$model_name' at $target_dir; cleaning up before retry..."
+            sudo rm -rf "$target_dir" 2>/dev/null || rm -rf "$target_dir"
+        fi
+    fi
+
+    mkdir -p "$REGISTRY"
+
+    HF_TOKEN_ARG=""
+    if [[ -n "${HF_TOKEN:-}" ]]; then
+        HF_TOKEN_ARG="-e HF_TOKEN=$HF_TOKEN"
+        debug "Using HF_TOKEN for authentication"
+    fi
+
+    if _is_preconverted_repo "$repo"; then
+        log "📥 Downloading pre-converted OpenVINO model: $repo"
+        log "This should be faster than conversion..."
+        echo ""
+
+        local download_status=0
+
+        # If the builder image is already cached locally, reuse it: it has
+        # huggingface_hub pre-installed, so we skip the per-pull
+        # `pip install` and the network round-trip that comes with it.
+        # Otherwise fall back to the small ephemeral python:3.12-slim image
+        # so users who only pull pre-converted models don't pay 5 GB for
+        # a builder image they never asked for.
+        if docker image inspect "$BUILDER_IMG" >/dev/null 2>&1; then
+            debug "Reusing $BUILDER_IMG for snapshot_download (huggingface_hub already installed)"
+            docker run --rm \
+                -v "$REGISTRY":/data \
+                -e HF_HOME=/data/.cache \
+                -e ILLAMA_REPO="$repo" \
+                -e ILLAMA_TARGET="/data/${model_name}" \
+                $HF_TOKEN_ARG \
+                --entrypoint python3 \
+                "$BUILDER_IMG" \
+                -c '
+import os
+from huggingface_hub import snapshot_download
+snapshot_download(
+    repo_id=os.environ["ILLAMA_REPO"],
+    local_dir=os.environ["ILLAMA_TARGET"],
+    token=os.environ.get("HF_TOKEN"),
+)
+print("Download complete!")
+' || download_status=$?
+        else
+            debug "Builder image not present; using ephemeral python:3.12-slim with pip install"
+            docker run --rm \
+                -v "$REGISTRY":/data \
+                -e HF_HOME=/data/.cache \
+                -e ILLAMA_REPO="$repo" \
+                -e ILLAMA_TARGET="/data/${model_name}" \
+                $HF_TOKEN_ARG \
+                python:3.12-slim \
+                bash -c '
+                    set -e
+                    pip install -q huggingface_hub
+                    python3 - <<PY
+import os
+from huggingface_hub import snapshot_download
+snapshot_download(
+    repo_id=os.environ["ILLAMA_REPO"],
+    local_dir=os.environ["ILLAMA_TARGET"],
+    token=os.environ.get("HF_TOKEN"),
+)
+print("Download complete!")
+PY
+                ' || download_status=$?
+        fi
+
+        if [[ $download_status -eq 0 ]] && _model_dir_has_artifact "$target_dir"; then
+            success "Model downloaded successfully: $model_name"
+            ensure_model_dir_writable "$target_dir"
+            write_metadata "$target_dir" "$repo" "preconverted-openvino"
+            cleanup_cache
+        else
+            _remove_partial_model_dir "$target_dir"
+            error "Download failed. Check the output above for errors."
+        fi
+    else
+        log "🏗️  Converting model: $repo"
+        log "This may take a while depending on model size..."
+        echo ""
+
+        if ! docker image inspect "$BUILDER_IMG" >/dev/null 2>&1; then
+            local builder_dir="${ILLAMA_HOME}/builder"
+            if [[ ! -f "${builder_dir}/Dockerfile" ]]; then
+                error "Builder Dockerfile missing at ${builder_dir}/Dockerfile. Re-run setup.sh."
+            fi
+            log "Builder image not found — building $BUILDER_IMG (one-time, ~5 GB)..."
+            # Tag with both `:latest` (default reference used elsewhere in this
+            # script) and `:$ILLAMA_VERSION` (immutable rollback pointer that
+            # matches the runner image tagged by setup.sh).
+            docker build \
+                --build-arg "ILLAMA_VERSION=${ILLAMA_VERSION}" \
+                -t "$BUILDER_IMG" \
+                -t "illama-builder:${ILLAMA_VERSION}" \
+                "$builder_dir"
+        fi
+
+        # EAGLE-3 / DFlash draft heads must be exported with an explicit task;
+        # without it optimum-cli infers the wrong one and the export fails.
+        local task_args=()
+        if [[ -n "$task_override" ]]; then
+            task_args=(--task "$task_override")
+        fi
+        # Some repos omit the metadata optimum uses to infer the library and
+        # abort with "The library name could not be automatically inferred".
+        # Everything illama converts is a transformers model, so allow an
+        # explicit override and default the draft path to it.
+        if [[ -n "$library_override" ]]; then
+            task_args+=(--library "$library_override")
+        fi
+
+        local convert_status=0
+        docker run --rm \
+            -v "$REGISTRY":/data \
+            -e HF_HOME=/data/.cache \
+            $HF_TOKEN_ARG \
+            "$BUILDER_IMG" \
+            --model "$repo" \
+            "${task_args[@]}" \
+            --weight-format int4 \
+            --trust-remote-code \
+            "/data/${model_name}" || convert_status=$?
+
+        if [[ $convert_status -eq 0 ]] && _model_dir_has_artifact "$target_dir"; then
+            success "Model converted successfully: $model_name"
+            ensure_model_dir_writable "$target_dir"
+            write_metadata "$target_dir" "$repo" "converted-openvino"
+            cleanup_cache
+        else
+            _remove_partial_model_dir "$target_dir"
+            error "Conversion failed. Check the output above for errors."
+        fi
+    fi
+
+    # Reverse linking: the thing we just pulled IS a draft model. Make sure its
+    # base exists (pulling it if needed) and wire both directions, so that
+    # `illama run <drafter>` / an API request naming the drafter transparently
+    # serves base+draft. This is the natural way to think about it - you pick
+    # "Qwen3-8B DFlash" as a configuration, not as two separate downloads.
+    if [[ $no_base -eq 0 ]] && _is_draft_repo "$repo"; then
+        echo ""
+        log "'$model_name' looks like a speculative-decoding draft model."
+
+        local base_name="" base_repo="" cand
+        # Prefer a base already in the registry - avoids a needless download
+        # and respects whatever quantisation the operator already chose.
+        while read -r cand; do
+            [[ -n "$cand" ]] || continue
+            local cand_name
+            cand_name=$(basename "$cand")
+            if _model_dir_has_artifact "${REGISTRY}/${cand_name}"; then
+                base_name="$cand_name"
+                log "Found matching base model already installed: $base_name"
+                break
+            fi
+        done < <(_derive_base_candidates "$repo")
+
+        # Nothing local. Ask the Hub first - a `base_model:` tag is
+        # authoritative and works across orgs (an AngelSlim drafter's base
+        # lives under Qwen/, which no name-mangling of the drafter id could
+        # ever produce). Fall back to the naming convention for the
+        # publishers that omit the tag (AngelSlim, circulus).
+        if [[ -z "$base_name" ]]; then
+            local tagged_base
+            tagged_base="$(_hf_repo_base_model "$repo" | head -n 1)"
+            if [[ -n "$tagged_base" ]]; then
+                debug "base_model tag says: $tagged_base"
+                local tagged_name
+                tagged_name=$(basename "$tagged_base")
+                if _model_dir_has_artifact "${REGISTRY}/${tagged_name}"; then
+                    base_name="$tagged_name"
+                    log "Base model already installed: $base_name"
+                elif _hf_repo_exists "$tagged_base"; then
+                    base_repo="$tagged_base"
+                fi
+            fi
+        fi
+
+        if [[ -z "$base_name" && -z "$base_repo" ]]; then
+            while read -r cand; do
+                [[ -n "$cand" ]] || continue
+                debug "probing base $cand"
+                if _hf_repo_exists "$cand"; then
+                    base_repo="$cand"
+                    break
+                fi
+            done < <(_derive_base_candidates "$repo")
+        fi
+
+        if [[ -z "$base_name" && -n "$base_repo" ]]; then
+            log "📥 Base model not installed; pulling $base_repo..."
+            cmd_pull "$base_repo" --no-base
+            base_name=$(basename "$base_repo")
+        fi
+
+        if [[ -z "$base_name" ]]; then
+            warn "Could not find a base model for '$model_name'. Link it manually:"
+            warn "    illama link <base-model> $model_name"
+            _derive_base_candidates "$repo" | sed 's/^/    tried: /'
+        elif [[ ! -f "${target_dir}/openvino_model.xml" ]]; then
+            warn "'$model_name' has no openvino_model.xml, so it cannot be used as a
+draft model (ov_genai.draft_model needs a text-only export). Not linking."
+        else
+            _write_draft_link "${REGISTRY}/${base_name}" "$model_name" "$assistant_tokens"
+            _write_base_link "$target_dir" "$base_name"
+            success "Linked $base_name  <->  draft=$model_name"
+            log "Request either name; illama serves base+draft for both."
+        fi
+    fi
+
+    # Optional companion draft model. Pulled after the target succeeds so a
+    # failed target never leaves a dangling link. Draft heads are always
+    # converted (never pre-converted OV repos) and always need the
+    # text-generation-with-past task.
+    if [[ -n "$draft_repo" ]]; then
+        echo ""
+        log "📥 Fetching draft model for speculative decoding: $draft_repo"
+
+        local draft_norm draft_name
+        draft_norm=$(_normalize_hf_repo_input "$draft_repo")
+        _validate_hf_repo_id "$draft_norm"
+        draft_name=$(basename "$draft_norm")
+        _validate_safe_model_name "$draft_name"
+
+        # Recurse for the download/convert machinery, then link.
+        cmd_pull "$draft_norm" --task text-generation-with-past --library transformers
+
+        if [[ -f "${REGISTRY}/${draft_name}/openvino_model.xml" ]]; then
+            # Write BOTH directions, same as the pull-a-drafter path does.
+            # Without the reverse pointer, `illama run <drafter>` would try to
+            # run the bare draft head as a standalone model - it loads (it is
+            # a valid IR) and then generates nothing, which is a confusing
+            # silent failure.
+            _write_draft_link "$target_dir" "$draft_name" "$assistant_tokens"
+            _write_base_link "${REGISTRY}/${draft_name}" "$model_name"
+            success "Linked $model_name  <->  draft=$draft_name (num_assistant_tokens=$assistant_tokens)"
+            log "Request either name; illama serves base+draft for both."
+        else
+            warn "Draft '$draft_name' has no openvino_model.xml; not linking.
+Speculative decoding needs a text-only draft export."
+        fi
+    fi
+}
+
+cmd_list() {
+    local verbose=0
+    if [[ "${1:-}" == "--verbose" || "${1:-}" == "-v" ]]; then
+        verbose=1
+    fi
+
+    echo ""
+    echo "=== Available Models ==="
+    printf "%-40s %-8s %s\n" "NAME" "SIZE" "DRAFT (speculative decoding)"
+    printf "%-40s %-8s %s\n" "----" "----" "----------------------------"
+
+    if [[ ! -d "$REGISTRY" ]]; then
+        echo "(no models installed)"
+        return 0
+    fi
+
+    local found=0
+    for model_dir in "$REGISTRY"/*/; do
+        if [[ -d "$model_dir" ]]; then
+            local model_name=$(basename "$model_dir")
+            # Skip hidden directories
+            [[ "$model_name" == .* ]] && continue
+
+            local size=$(du -sh "$model_dir" 2>/dev/null | cut -f1)
+            local draft base note
+            draft="$(_model_draft_name "$model_name" | head -n 1)"
+            base="$(_model_base_name "$model_name" | head -n 1)"
+            if [[ -n "$draft" ]]; then
+                note="draft: $draft"
+            elif [[ -n "$base" ]]; then
+                # A draft head is not runnable on its own; requesting it serves
+                # the base pipeline with this drafter attached.
+                note="(draft head for $base)"
+            else
+                note="-"
+            fi
+            printf "%-40s %-8s %s\n" "$model_name" "${size:-unknown}" "$note"
+            found=1
+        fi
+    done
+    
+    if [[ $found -eq 0 ]]; then
+        echo "(no models installed)"
+    fi
+    echo ""
+
+    # Optional verbose info from HTTP API (if server is running)
+    if [[ $verbose -eq 1 ]]; then
+        echo "=== Server & Model Stats (from /illama/stats) ==="
+        if docker ps -q -f name="$CONTAINER_NAME" | grep -q .; then
+            curl_api -s "http://localhost:$PORT/illama/stats" 2>/dev/null | python3 -m json.tool || \
+                echo "  (unable to fetch stats from server)"
+        else
+            echo "  (service not running)"
+        fi
+        echo ""
+    fi
+}
+
+cmd_rm() {
+    local model=""
+    local force=0
+
+    # Parse args (model name + optional --force / -f). Order is flexible.
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force|-f)
+                force=1
+                shift
+                ;;
+            -*)
+                error "Unknown flag: $1"
+                ;;
+            *)
+                if [[ -z "$model" ]]; then
+                    model="$1"
+                else
+                    error "Usage: illama rm <model_name> [--force]"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$model" ]]; then
+        error "Usage: illama rm <model_name> [--force]"
+    fi
+
+    # Defense in depth: reject path traversal even though REGISTRY is fixed.
+    _validate_safe_model_name "$model"
+
+    local target="${REGISTRY}/${model}"
+
+    if [[ ! -d "$target" ]]; then
+        error "Model not found: $model"
+    fi
+
+    # If the runner is up and currently has this model loaded, refuse to
+    # delete (or, with --force, unload-then-delete). This prevents the
+    # runtime from continuing to hold open files that we just deleted, and
+    # avoids a state where /v1/models still advertises a model that no
+    # longer has files on disk.
+    if docker ps -q -f name="$CONTAINER_NAME" 2>/dev/null | grep -q .; then
+        local loaded_model
+        loaded_model=$(curl_api -s --max-time 2 "http://localhost:$PORT/health" 2>/dev/null \
+            | python3 -c "import json,sys
+try:
+    print((json.load(sys.stdin).get('loaded_model') or '').strip())
+except Exception:
+    pass" 2>/dev/null) || loaded_model=""
+
+        if [[ -n "$loaded_model" && "$loaded_model" == "$model" ]]; then
+            if [[ $force -eq 0 ]]; then
+                warn "Model '$model' is currently loaded by the running server."
+                warn "Unload it first:"
+                warn "  curl -s -X POST http://localhost:$PORT/v1/unload"
+                warn "or pass --force to unload and delete in one go."
+                return 1
+            fi
+            warn "Model '$model' is loaded by the running server; --force given, unloading first..."
+            curl_api -s --max-time 5 -X POST "http://localhost:$PORT/v1/unload" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    read -p "Delete '$model'? [y/N]: " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        return 0
+    fi
+
+    sudo rm -rf "$target"
+    success "Deleted: $model"
+}
+
+cmd_show() {
+    local model="$1"
+    
+    if [[ -z "$model" ]]; then
+        error "Usage: illama show <model_name>"
+    fi
+    
+    local target="${REGISTRY}/${model}"
+    
+    if [[ ! -d "$target" ]]; then
+        error "Model not found: $model"
+    fi
+    
+    echo ""
+    echo "=== Model: $model ==="
+    
+    # Size
+    local size=$(du -sh "$target" 2>/dev/null | cut -f1)
+    echo "Size: $size"
+    
+    # Config info — pass path via argv so model names with quotes can't inject Python.
+    if [[ -f "${target}/config.json" ]]; then
+        echo ""
+        echo "Configuration:"
+        python3 - "${target}/config.json" <<'PY' 2>/dev/null || echo "  (unable to parse config)"
+import json, sys
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    c = json.load(f)
+print(f"  Architecture: {c.get('architectures', ['unknown'])[0]}")
+print(f"  Hidden Size: {c.get('hidden_size', 'N/A')}")
+print(f"  Num Layers: {c.get('num_hidden_layers', 'N/A')}")
+print(f"  Vocab Size: {c.get('vocab_size', 'N/A')}")
+PY
+    fi
+
+    if [[ -f "${target}/model.json" ]]; then
+        echo ""
+        echo "Illama metadata:"
+        python3 - "${target}/model.json" <<'PY' 2>/dev/null || echo "  (unable to parse model.json)"
+import json, sys
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    data = json.load(f)
+print(f"  Repo ID: {data.get('repo_id', 'unknown')}")
+print(f"  Source: {data.get('source', 'unknown')}")
+overrides = data.get("overrides", {})
+if isinstance(overrides, dict) and overrides:
+    print("  Overrides:")
+    for key in sorted(overrides):
+        print(f"    {key}: {overrides[key]}")
+PY
+    fi
+    
+    # Files
+    echo ""
+    echo "Files:"
+    ls -lh "$target"/*.xml "$target"/*.bin 2>/dev/null | awk '{print "  " $9 " (" $5 ")"}' || echo "  (no OpenVINO files)"
+    echo ""
+}
+
+cmd_run() {
+    local model=""
+    local prompt=""
+    local expect_prompt=0
+    local stream_mode="auto"
+
+    # Parse arguments: illama run <model> [prompt] or illama run <model> -p "<prompt>"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -p|--prompt)
+                expect_prompt=1
+                shift
+                continue
+                ;;
+            --stream)
+                stream_mode="on"
+                ;;
+            --no-stream)
+                stream_mode="off"
+                ;;
+            *)
+                if [[ -z "$model" ]]; then
+                    model="$1"
+                elif [[ $expect_prompt -eq 1 ]]; then
+                    prompt="$1"
+                    expect_prompt=0
+                elif [[ -z "$prompt" ]]; then
+                    # Backwards-compatible: second positional is prompt
+                    prompt="$1"
+                fi
+                ;;
+        esac
+        shift
+    done
+    
+    if [[ -z "$model" ]]; then
+        error "Usage: illama run <model_name> [prompt] or illama run <model_name> -p \"prompt\""
+    fi
+    
+    # Check if service is running
+    if ! docker ps -q -f name="$CONTAINER_NAME" | grep -q .; then
+        warn "Service not running. Starting..."
+        cmd_serve
+    fi
+    
+    # Build a chat request body safely. Takes the messages JSON on stdin and
+    # writes the full request body to stdout. Avoids shell-into-JSON splicing.
+    build_request_body() {
+        local messages_json="$1"
+        local stream="$2"
+        ILLAMA_MODEL="$model" ILLAMA_STREAM="$stream" python3 - "$messages_json" <<'PY'
+import json, os, sys
+messages = json.loads(sys.argv[1])
+body = {
+    "model": os.environ["ILLAMA_MODEL"],
+    "messages": messages,
+    "max_tokens": 4096,
+    "stream": os.environ["ILLAMA_STREAM"] == "true",
+}
+if body["stream"]:
+    body["stream_options"] = {"include_usage": True}
+print(json.dumps(body))
+PY
+    }
+
+    # Helper function to make API call - returns content and usage as separate lines
+    make_request() {
+        local messages_json="$1"
+        local body
+        body=$(build_request_body "$messages_json" "false") || return 1
+
+        local response
+        response=$(curl_api -s -X POST "http://localhost:$PORT/v1/chat/completions" \
+            -H "Content-Type: application/json" \
+            --data-binary @- <<<"$body")
+
+        debug "Raw API response: $response"
+
+        # Parse response with proper error handling - output content, then stats on stderr.
+        # NOTE: We pass the response through an env var (ILLAMA_API_RESPONSE) instead of
+        # piping into stdin. With `python3 - <<'PY'`, the heredoc redirection wins over
+        # the pipe, so `json.load(sys.stdin)` would read the (already-consumed) script
+        # source and always fail with "Invalid JSON response". This used to break
+        # non-streaming `illama run` for everyone.
+        ILLAMA_API_RESPONSE="$response" python3 - <<'PY'
+import os, sys, json
+try:
+    data = json.loads(os.environ.get("ILLAMA_API_RESPONSE", ""))
+    if "error" in data:
+        err = data["error"]
+        msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+        print(f"API Error: {msg}", file=sys.stderr)
+        sys.exit(1)
+    if "choices" not in data or len(data["choices"]) == 0:
+        print("Error: Empty response from server", file=sys.stderr)
+        sys.exit(1)
+    content = data["choices"][0]["message"]["content"]
+    print(content)
+    if "usage" in data:
+        usage = data["usage"]
+        tps = usage.get("tokens_per_second", 0)
+        gen_time = usage.get("generation_time_seconds", 0)
+        print(
+            f"STATS:{usage.get('prompt_tokens',0)}:{usage.get('completion_tokens',0)}:"
+            f"{usage.get('total_tokens',0)}:{tps}:{gen_time}",
+            file=sys.stderr,
+        )
+except json.JSONDecodeError:
+    print("Error: Invalid JSON response", file=sys.stderr)
+    sys.exit(1)
+except Exception as e:
+    print(f"Error: {e}", file=sys.stderr)
+    sys.exit(1)
+PY
+    }
+
+    make_request_stream() {
+        local messages_json="$1"
+        local content_file="$2"
+        local stats_file="$3"
+        local body
+        body=$(build_request_body "$messages_json" "true") || return 1
+        curl_api -sN -X POST "http://localhost:$PORT/v1/chat/completions" \
+            -H "Content-Type: application/json" \
+            --data-binary @- <<<"$body" | \
+        python3 -c "
+import json, sys
+
+content_path = sys.argv[1]
+stats_path = sys.argv[2]
+chunks = []
+usage_payload = None
+
+def emit_error(err):
+    if isinstance(err, dict):
+        msg = err.get('message', str(err))
+    else:
+        msg = str(err)
+    print(f'API Error: {msg}', file=sys.stderr)
+
+for raw in sys.stdin:
+    line = raw.strip()
+    if not line or not line.startswith('data: '):
+        continue
+    payload = line[6:]
+    if payload == '[DONE]':
+        break
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError:
+        continue
+    if 'error' in data:
+        emit_error(data['error'])
+        sys.exit(1)
+    if 'usage' in data and isinstance(data['usage'], dict):
+        usage_payload = data['usage']
+        continue
+    choices = data.get('choices') or []
+    if not choices:
+        continue
+    choice = choices[0]
+    delta = choice.get('delta')
+    text = ''
+    if isinstance(delta, dict):
+        text = delta.get('content') or ''
+    if not text:
+        text = choice.get('text') or ''
+    if text:
+        chunks.append(text)
+        print(text, end='', flush=True)
+
+with open(content_path, 'w', encoding='utf-8') as f:
+    f.write(''.join(chunks))
+
+if usage_payload is not None:
+    with open(stats_path, 'w', encoding='utf-8') as f:
+        json.dump(usage_payload, f)
+
+if chunks:
+    print()
+" "$content_file" "$stats_file"
+    }
+    
+    # Single-shot mode: prompt provided as argument
+    if [[ -n "$prompt" ]]; then
+        debug "Single-shot mode with prompt: $prompt"
+
+        # Build messages JSON safely — pass prompt via sys.argv so it cannot
+        # be interpreted as Python source.
+        local messages_json
+        messages_json=$(python3 - "$prompt" <<'PY'
+import json, sys
+print(json.dumps([{"role": "user", "content": sys.argv[1]}]))
+PY
+        )
+
+        local effective_stream="$stream_mode"
+        if [[ "$effective_stream" == "auto" ]]; then
+            effective_stream="off"
+        fi
+
+        if [[ "$effective_stream" == "on" ]]; then
+            local content_file=$(mktemp)
+            local stats_file=$(mktemp)
+            make_request_stream "$messages_json" "$content_file" "$stats_file"
+            local exit_code=$?
+            if [[ $exit_code -eq 0 && -s "$stats_file" ]]; then
+                python3 - "$stats_file" <<'PY' 2>/dev/null || true
+import json, sys
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    usage = json.load(f)
+print()
+print("\033[0;34m───────────────────────────────────────\033[0m")
+print(
+    f"\033[0;34m📊 Stats:\033[0m tokens={usage.get('total_tokens',0)} "
+    f"(prompt={usage.get('prompt_tokens',0)}, completion={usage.get('completion_tokens',0)})"
+)
+print(
+    f"\033[0;34m⚡ Speed:\033[0m {usage.get('tokens_per_second',0)} tokens/sec "
+    f"({usage.get('generation_time_seconds',0)}s)"
+)
+PY
+            fi
+            rm -f "$content_file"
+            rm -f "$stats_file"
+            return $exit_code
+        fi
+        
+        # Capture both stdout (content) and stderr (stats)
+        local output_file=$(mktemp)
+        local error_file=$(mktemp)
+        make_request "$messages_json" > "$output_file" 2> "$error_file"
+        local exit_code=$?
+        
+        # Display content
+        cat "$output_file"
+        
+        # Check for errors or stats
+        if [[ $exit_code -eq 0 ]]; then
+            # Parse and display stats if present
+            local stats_line=$(grep "^STATS:" "$error_file" 2>/dev/null)
+            if [[ -n "$stats_line" ]]; then
+                local prompt_tokens=$(echo "$stats_line" | cut -d: -f2)
+                local completion_tokens=$(echo "$stats_line" | cut -d: -f3)
+                local total_tokens=$(echo "$stats_line" | cut -d: -f4)
+                local tps=$(echo "$stats_line" | cut -d: -f5)
+                local gen_time=$(echo "$stats_line" | cut -d: -f6)
+                echo ""
+                echo -e "${BLUE}───────────────────────────────────────${NC}"
+                echo -e "${BLUE}📊 Stats:${NC} tokens=$total_tokens (prompt=$prompt_tokens, completion=$completion_tokens)"
+                echo -e "${BLUE}⚡ Speed:${NC} ${tps} tokens/sec (${gen_time}s)"
+            fi
+        else
+            # Show error (filter out STATS line)
+            grep -v "^STATS:" "$error_file" >&2
+        fi
+        
+        rm -f "$output_file" "$error_file"
+        return $exit_code
+    fi
+    
+    # Interactive chat mode
+    echo ""
+    echo "=== Chat with $model ==="
+    echo "Type 'bye' or Ctrl+C to exit"
+    echo ""
+    
+    local history='[]'
+    local effective_stream="$stream_mode"
+    if [[ "$effective_stream" == "auto" ]]; then
+        effective_stream="on"
+    fi
+    
+    while true; do
+        read -p "You: " user_input
+        
+        if [[ "$user_input" == "bye" ]] || [[ "$user_input" == "exit" ]] || [[ "$user_input" == "quit" ]]; then
+            echo "Goodbye!"
+            break
+        fi
+        
+        if [[ -z "$user_input" ]]; then
+            continue
+        fi
+        
+        # Build messages JSON safely using Python with sys.argv (avoids quote issues)
+        local messages_json=$(python3 -c "
+import json, sys
+history = json.loads(sys.argv[1])
+history.append({'role': 'user', 'content': sys.argv[2]})
+print(json.dumps(history))
+" "$history" "$user_input")
+        
+        if [[ "$effective_stream" == "on" ]]; then
+            local content_file=$(mktemp)
+            local stats_file=$(mktemp)
+            echo ""
+            echo -ne "${GREEN}AI:${NC} "
+            make_request_stream "$messages_json" "$content_file" "$stats_file"
+            local exit_code=$?
+            local assistant_msg=$(cat "$content_file" 2>/dev/null)
+            rm -f "$content_file"
+            if [[ $exit_code -eq 0 && -s "$stats_file" ]]; then
+                python3 - "$stats_file" <<'PY' 2>/dev/null || true
+import json, sys
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    usage = json.load(f)
+print("\033[0;34m───────────────────────────────────────\033[0m")
+print(
+    f"\033[0;34m📊 Stats:\033[0m tokens={usage.get('total_tokens',0)} "
+    f"(prompt={usage.get('prompt_tokens',0)}, completion={usage.get('completion_tokens',0)})"
+)
+print(
+    f"\033[0;34m⚡ Speed:\033[0m {usage.get('tokens_per_second',0)} tokens/sec "
+    f"({usage.get('generation_time_seconds',0)}s)"
+)
+PY
+            fi
+            rm -f "$stats_file"
+            if [[ $exit_code -ne 0 ]]; then
+                echo ""
+                continue
+            fi
+            echo ""
+        else
+            # Call API
+            local assistant_msg=$(make_request "$messages_json")
+            
+            if [[ $? -ne 0 ]]; then
+                echo -e "${RED}$assistant_msg${NC}"
+                continue
+            fi
+            
+            echo ""
+            echo -e "${GREEN}AI:${NC} $assistant_msg"
+            echo ""
+        fi
+        
+        # Update history safely
+        history=$(python3 -c "
+import json, sys
+history = json.loads(sys.argv[1])
+history.append({'role': 'assistant', 'content': sys.argv[2]})
+print(json.dumps(history))
+" "$messages_json" "$assistant_msg")
+    done
+}
+
+cmd_version() {
+    echo "illama version ${ILLAMA_VERSION}"
+    echo "Runner Image: $(docker inspect $RUNNER_IMG --format '{{index .RepoDigests 0}}' 2>/dev/null || echo 'not built')"
+    echo "Builder Image: $(docker inspect $BUILDER_IMG --format '{{index .RepoDigests 0}}' 2>/dev/null || echo 'not built (will be built on first non-OpenVINO pull)')"
+}
+
+# Reports the loaded model name as printed by /illama/health, or empty string
+# if the runner is not reachable. Used by cmd_gc to skip the live model and
+# by cmd_doctor to surface "what's loaded right now".
+_loaded_model_name() {
+    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER_NAME"; then
+        return 0
+    fi
+    local body
+    body="$(curl -fsS --max-time 3 "${HEALTH_URL}" 2>/dev/null || true)"
+    if [[ -z "$body" ]]; then
+        return 0
+    fi
+    ILLAMA_HEALTH_BODY="$body" python3 - <<'PY' 2>/dev/null || true
+import json, os
+try:
+    body = json.loads(os.environ.get("ILLAMA_HEALTH_BODY") or "{}")
+except Exception:
+    raise SystemExit(0)
+loaded = body.get("loaded_model") or ""
+if loaded:
+    print(loaded)
+PY
+}
+
+cmd_gc() {
+    # Reclaim disk space from the registry: prune the HF download cache and
+    # any model directories that are missing the OpenVINO artifacts (i.e. an
+    # interrupted pull/conversion left a partial tree behind).
+    #
+    # Flags:
+    #   --dry-run      Show what would be removed; do not delete anything.
+    #   --force        Skip the confirmation prompt.
+    #   --keep-cache   Keep ${REGISTRY}/.cache/ (HuggingFace download cache)
+    #                  and only remove broken model dirs.
+    local dry_run=0 force=0 keep_cache=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dry-run) dry_run=1; shift ;;
+            --force|-f) force=1; shift ;;
+            --keep-cache) keep_cache=1; shift ;;
+            -h|--help)
+                cat <<EOF
+Usage: illama gc [--dry-run] [--force] [--keep-cache]
+
+Removes the HuggingFace download cache (\${REGISTRY}/.cache) and any model
+directories under \${REGISTRY} that are missing the OpenVINO artifact
+(openvino_model.xml or openvino_language_model.xml). The currently-loaded
+model is never touched.
+
+  --dry-run      Show what would be removed; do not delete anything.
+  --force, -f    Skip the confirmation prompt.
+  --keep-cache   Keep the HF download cache; only remove broken model dirs.
+EOF
+                return 0
+                ;;
+            *)
+                error "Unknown gc flag: $1. Try 'illama gc --help'."
+                ;;
+        esac
+    done
+
+    if [[ ! -d "$REGISTRY" ]]; then
+        log "Registry not found at $REGISTRY - nothing to GC."
+        return 0
+    fi
+
+    local loaded
+    loaded="$(_loaded_model_name | head -n 1)"
+    [[ -n "$loaded" ]] && debug "Skipping currently-loaded model: $loaded"
+
+    # Find broken model dirs (top-level dirs under REGISTRY that have no
+    # openvino artifact). Skip the .cache subdir and the loaded model.
+    local broken=()
+    local total_broken_bytes=0
+    local entry name
+    for entry in "$REGISTRY"/*/; do
+        [[ -d "$entry" ]] || continue
+        name="$(basename "$entry")"
+        [[ "$name" == ".cache" ]] && continue
+        [[ -n "$loaded" && "$name" == "$loaded" ]] && continue
+        if ! _model_dir_has_artifact "$entry"; then
+            broken+=("$entry")
+            local sz
+            sz="$(du -sb "$entry" 2>/dev/null | awk '{print $1}')"
+            [[ -n "$sz" ]] && total_broken_bytes=$((total_broken_bytes + sz))
+        fi
+    done
+
+    local cache_dir="${REGISTRY}/.cache"
+    local cache_bytes=0
+    if [[ $keep_cache -eq 0 && -d "$cache_dir" ]]; then
+        cache_bytes="$(du -sb "$cache_dir" 2>/dev/null | awk '{print $1}')"
+        cache_bytes="${cache_bytes:-0}"
+    fi
+
+    if [[ ${#broken[@]} -eq 0 && $cache_bytes -eq 0 ]]; then
+        success "Nothing to clean up. Registry is healthy."
+        return 0
+    fi
+
+    echo ""
+    echo "Reclaim plan:"
+    if [[ ${#broken[@]} -gt 0 ]]; then
+        echo "  Broken / partial model directories:"
+        for entry in "${broken[@]}"; do
+            local sz_h
+            sz_h="$(du -sh "$entry" 2>/dev/null | cut -f1)"
+            echo "    - ${entry} (${sz_h:-?})"
+        done
+        printf "  Total broken size: %s\n" \
+            "$(numfmt --to=iec --suffix=B "$total_broken_bytes" 2>/dev/null || echo "${total_broken_bytes}B")"
+    fi
+    if [[ $cache_bytes -gt 0 ]]; then
+        local cache_h
+        cache_h="$(du -sh "$cache_dir" 2>/dev/null | cut -f1)"
+        echo "  HuggingFace download cache:"
+        echo "    - ${cache_dir} (${cache_h:-?})"
+    fi
+    echo ""
+
+    if [[ $dry_run -eq 1 ]]; then
+        log "Dry run - no changes made. Re-run without --dry-run to apply."
+        return 0
+    fi
+
+    if [[ $force -eq 0 ]]; then
+        local reply
+        read -r -p "Proceed with deletion? [y/N] " reply
+        case "$reply" in
+            y|Y|yes|YES) ;;
+            *)
+                warn "Aborted by user."
+                return 0
+                ;;
+        esac
+    fi
+
+    for entry in "${broken[@]}"; do
+        log "Removing broken model dir: $entry"
+        sudo rm -rf "$entry" 2>/dev/null || rm -rf "$entry" 2>/dev/null || \
+            warn "Failed to remove $entry"
+    done
+
+    if [[ $cache_bytes -gt 0 ]]; then
+        log "Removing HF download cache: $cache_dir"
+        sudo rm -rf "$cache_dir" 2>/dev/null || rm -rf "$cache_dir" 2>/dev/null || \
+            warn "Failed to remove $cache_dir"
+    fi
+
+    success "GC complete."
+}
+
+cmd_doctor() {
+    # Run a battery of read-only health checks and print a pass/warn/fail
+    # summary. Useful when something is wrong and you want to know whether
+    # the issue is host setup, container state, GPU access, or runner.
+    local fail_count=0
+    local warn_count=0
+    local pass_count=0
+
+    _doc_pass() { echo -e "  ${GREEN}✅${NC} $1"; pass_count=$((pass_count + 1)); }
+    _doc_warn() { echo -e "  ${YELLOW}⚠️${NC}  $1"; warn_count=$((warn_count + 1)); }
+    _doc_fail() { echo -e "  ${RED}❌${NC} $1"; fail_count=$((fail_count + 1)); }
+
+    echo ""
+    echo "${BLUE}illama doctor${NC} - host and runtime checks"
+    echo ""
+
+    echo "[1/6] Host prerequisites"
+    if command -v docker >/dev/null 2>&1; then
+        _doc_pass "docker available ($(docker --version 2>/dev/null | cut -d, -f1))"
+        if docker info >/dev/null 2>&1; then
+            _doc_pass "docker daemon reachable"
+        else
+            _doc_fail "docker daemon not reachable - try 'sudo usermod -aG docker \$USER && newgrp docker'"
+        fi
+    else
+        _doc_fail "docker not installed - https://get.docker.com"
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        _doc_pass "python3 available ($(python3 --version 2>/dev/null))"
+    else
+        _doc_fail "python3 not installed - 'sudo apt install python3'"
+    fi
+    if command -v curl >/dev/null 2>&1; then
+        _doc_pass "curl available"
+    else
+        _doc_warn "curl not installed - 'illama bench' and many checks degrade gracefully"
+    fi
+    echo ""
+
+    echo "[2/6] Filesystem layout"
+    if [[ -d "$ILLAMA_HOME" ]]; then
+        _doc_pass "ILLAMA_HOME exists at $ILLAMA_HOME"
+    else
+        _doc_fail "ILLAMA_HOME missing at $ILLAMA_HOME - re-run setup.sh"
+    fi
+    if [[ -d "$REGISTRY" ]]; then
+        _doc_pass "registry directory exists at $REGISTRY"
+    else
+        _doc_warn "registry missing at $REGISTRY - 'illama pull' will create it"
+    fi
+    if [[ -f "${ILLAMA_HOME}/runner/Dockerfile" ]]; then
+        _doc_pass "runner Dockerfile present"
+    else
+        _doc_fail "runner Dockerfile missing - re-run setup.sh"
+    fi
+    if [[ -f "${ILLAMA_HOME}/builder/Dockerfile" ]]; then
+        _doc_pass "builder Dockerfile present"
+    else
+        _doc_warn "builder Dockerfile missing - 'illama pull' on raw HF repos will fail"
+    fi
+    if [[ -f "${ILLAMA_HOME}/VERSION" ]]; then
+        _doc_pass "VERSION file present (${ILLAMA_VERSION})"
+    else
+        _doc_warn "VERSION file missing - 'illama version' falls back to 'unknown'"
+    fi
+    echo ""
+
+    echo "[3/6] Docker images"
+    if docker image inspect "$RUNNER_IMG" >/dev/null 2>&1; then
+        _doc_pass "$RUNNER_IMG present"
+    else
+        _doc_fail "$RUNNER_IMG missing - re-run setup.sh or 'docker build runner/'"
+    fi
+    if docker image inspect "$BUILDER_IMG" >/dev/null 2>&1; then
+        _doc_pass "$BUILDER_IMG present"
+    else
+        _doc_warn "$BUILDER_IMG not built yet - will build lazily on first non-OpenVINO pull (~5 GB)"
+    fi
+    echo ""
+
+    echo "[4/6] GPU access"
+    if [[ -e /dev/dri ]]; then
+        _doc_pass "/dev/dri found"
+        if groups 2>/dev/null | grep -q video; then
+            _doc_pass "user in 'video' group"
+        else
+            _doc_warn "user not in 'video' group - 'sudo usermod -aG video \$USER && newgrp video'"
+        fi
+        if groups 2>/dev/null | grep -q render; then
+            _doc_pass "user in 'render' group"
+        else
+            _doc_warn "user not in 'render' group - 'sudo usermod -aG render \$USER && newgrp render'"
+        fi
+    else
+        _doc_warn "/dev/dri not present - inference will fall back to CPU"
+    fi
+    echo ""
+
+    echo "[5/6] Runner service"
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER_NAME"; then
+        _doc_pass "container $CONTAINER_NAME is running"
+        local body
+        body="$(curl -fsS --max-time 3 "$HEALTH_URL" 2>/dev/null || true)"
+        if [[ -n "$body" ]]; then
+            _doc_pass "/illama/health responding on port $PORT"
+            local loaded
+            loaded="$(_loaded_model_name | head -n 1)"
+            if [[ -n "$loaded" ]]; then
+                _doc_pass "loaded model: $loaded"
+            else
+                _doc_warn "no model currently loaded (idle)"
+            fi
+        else
+            _doc_fail "/illama/health on port $PORT not responding - check 'illama logs'"
+        fi
+    else
+        _doc_warn "container $CONTAINER_NAME not running - 'illama serve' to start"
+    fi
+    echo ""
+
+    echo "[6/6] Registry contents"
+    local model_count=0
+    local broken_count=0
+    if [[ -d "$REGISTRY" ]]; then
+        for entry in "$REGISTRY"/*/; do
+            [[ -d "$entry" ]] || continue
+            local name
+            name="$(basename "$entry")"
+            [[ "$name" == ".cache" ]] && continue
+            model_count=$((model_count + 1))
+            if ! _model_dir_has_artifact "$entry"; then
+                broken_count=$((broken_count + 1))
+            fi
+        done
+        if [[ $model_count -eq 0 ]]; then
+            _doc_warn "no models in registry yet - 'illama pull <repo>' to add one"
+        elif [[ $broken_count -eq 0 ]]; then
+            _doc_pass "$model_count model(s), all have OpenVINO artifacts"
+        else
+            _doc_warn "$model_count model(s), $broken_count broken/partial - run 'illama gc'"
+        fi
+    fi
+    echo ""
+
+    echo "Summary:"
+    echo "  ${GREEN}pass=${pass_count}${NC}  ${YELLOW}warn=${warn_count}${NC}  ${RED}fail=${fail_count}${NC}"
+    if [[ $fail_count -gt 0 ]]; then
+        return 1
+    fi
+    return 0
+}
+
+cmd_logs() {
+    local lines="${1:-100}"
+    case "$lines" in
+        ''|*[!0-9]*)
+            error "Usage: illama logs [N]   (N = number of recent lines, default 100)"
+            ;;
+    esac
+
+    if [[ -z $(docker ps -aq -f name="^${CONTAINER_NAME}$") ]]; then
+        warn "Service has never been started. Run 'illama serve' first."
+        return 0
+    fi
+    docker logs -f --tail "$lines" "$CONTAINER_NAME"
+}
+
+cmd_bench() {
+    local script_path="${ILLAMA_HOME}/scripts/benchmark_api.py"
+    if [[ ! -f "$script_path" ]]; then
+        error "benchmark_api.py not found at $script_path. Re-run setup.sh."
+    fi
+
+    if [[ -z $(docker ps -q -f name="^${CONTAINER_NAME}$") ]]; then
+        warn "Service not running. Starting..."
+        cmd_serve
+    fi
+
+    local args=(--base-url "http://localhost:${PORT}/v1")
+    if [[ -n "$API_KEY" ]]; then
+        args+=(--api-key "$API_KEY")
+    fi
+    python3 "$script_path" "${args[@]}" "$@"
+}
+
+cmd_search() {
+    # Browse the HuggingFace OpenVINO model index from the CLI and one-step
+    # pull a selected entry. Defaults: trending, 20 results. --vlm filters to
+    # image-text-to-text. The HF API call is a plain GET; no auth needed for
+    # public listings (HF_TOKEN is honored if exported).
+    local query=""
+    local pipeline_tag=""
+    local limit="20"
+    local sort="trending"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --vlm)
+                pipeline_tag="image-text-to-text"
+                shift
+                ;;
+            --limit)
+                if [[ -z "${2:-}" ]]; then
+                    error "--limit requires a value"
+                fi
+                limit="$2"
+                shift 2
+                ;;
+            --sort)
+                if [[ -z "${2:-}" ]]; then
+                    error "--sort requires a value"
+                fi
+                sort="$2"
+                shift 2
+                ;;
+            --help|-h)
+                cat <<EOF
+Usage: illama search [query] [--vlm] [--limit N] [--sort trending|downloads|likes]
+
+Browse https://huggingface.co/models?library=openvino interactively and
+optionally pull the picked model in one step.
+
+Options:
+  --vlm        Restrict to image-text-to-text (Vision Language Models)
+  --limit N    Number of results (default 20, capped at 100 by HF)
+  --sort S     trending (default) | downloads | likes
+EOF
+                return 0
+                ;;
+            --*)
+                error "Unknown flag: $1 (try 'illama search --help')"
+                ;;
+            *)
+                if [[ -z "$query" ]]; then
+                    query="$1"
+                else
+                    query="$query $1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    case "$sort" in
+        trending|downloads|likes) ;;
+        *) error "--sort must be one of: trending, downloads, likes (got: '$sort')" ;;
+    esac
+
+    if ! [[ "$limit" =~ ^[1-9][0-9]*$ ]]; then
+        error "--limit must be a positive integer (got: '$limit')"
+    fi
+    if (( limit > 100 )); then
+        warn "Capping --limit at 100 (HuggingFace API limit)."
+        limit=100
+    fi
+
+    # URL-encode the query through python3 to avoid a sed/awk dance and so
+    # exotic characters (spaces, +, &) don't break the URL.
+    #
+    # API quirks worth knowing:
+    #   - The website filter `?library=openvino` is a no-op on /api/models
+    #     (silently ignored). The actual tag filter is `filter=openvino`.
+    #   - The API does NOT accept `sort=trending`; the field is
+    #     `sort=trendingScore` with `direction=-1` for descending. Same for
+    #     downloads / likes.
+    #
+    # Note: `local var=$(cmd) || error` does NOT propagate cmd's exit status -
+    # `local` itself returns 0, masking failure. So we declare and assign on
+    # separate lines and check $? on the assignment.
+    local url
+    url=$(QUERY="$query" PIPELINE_TAG="$pipeline_tag" SORT="$sort" LIMIT="$limit" \
+        python3 -c '
+import os, urllib.parse
+sort_field_map = {
+    "trending": "trendingScore",
+    "downloads": "downloads",
+    "likes": "likes",
+}
+params = {
+    "filter": "openvino",
+    "sort": sort_field_map[os.environ["SORT"]],
+    "direction": "-1",
+    "limit": os.environ["LIMIT"],
+}
+q = os.environ["QUERY"].strip()
+if q:
+    params["search"] = q
+tag = os.environ["PIPELINE_TAG"].strip()
+if tag:
+    params["pipeline_tag"] = tag
+print("https://huggingface.co/api/models?" + urllib.parse.urlencode(params))
+') || error "Failed to build search URL."
+
+    debug "Search URL: $url"
+    log "🔎 Searching huggingface.co for OpenVINO models..."
+
+    # Pass HF_TOKEN if the user has one exported; the API doesn't require it
+    # for public listings but gated repos need it to be visible.
+    local -a curl_headers=(-H "Accept: application/json")
+    if [[ -n "${HF_TOKEN:-}" ]]; then
+        curl_headers+=(-H "Authorization: Bearer ${HF_TOKEN}")
+    fi
+
+    local body
+    body=$(curl -fsS --max-time 15 "${curl_headers[@]}" "$url") || \
+        error "HuggingFace search failed (network error or HTTP error)."
+    if [[ -z "$body" ]]; then
+        error "HuggingFace returned an empty response."
+    fi
+
+    # Render the table and emit the picked-id list separately, separated by a
+    # sentinel line so the bash side can split them without parsing JSON twice.
+    # The body is passed via env var so the python3 -c script can use a normal
+    # single-quoted shell argument with no quote juggling, and so we don't have
+    # to dance around `python3 -` consuming the heredoc as its script.
+    local rendered
+    rendered=$(ILLAMA_HF_BODY="$body" python3 -c '
+import os, json, sys
+from datetime import datetime, timezone
+
+def fmt_age(iso):
+    if not iso:
+        return "-"
+    try:
+        dt = datetime.strptime(iso[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+    except Exception:
+        return iso[:10]
+    delta = datetime.now(timezone.utc) - dt
+    days = delta.days
+    if days < 1:
+        h = delta.seconds // 3600
+        return "just now" if h < 1 else "{} hours ago".format(h)
+    if days < 30:
+        return "{} days ago".format(days)
+    months = days // 30
+    if months < 12:
+        return "{} months ago".format(months)
+    return "{} years ago".format(months // 12)
+
+raw = os.environ.get("ILLAMA_HF_BODY", "")
+try:
+    data = json.loads(raw)
+except json.JSONDecodeError as e:
+    print("ERROR: failed to parse HF response: {}".format(e), file=sys.stderr)
+    sys.exit(2)
+if not isinstance(data, list):
+    print("ERROR: unexpected response shape (expected a list)", file=sys.stderr)
+    sys.exit(2)
+
+header = "{:<4}{:<60}{:<22}{:>10}  {:>6}  {}".format(
+    "#", "NAME", "TYPE", "DLs", "LIKES", "UPDATED"
+)
+print()
+print(header)
+print("-" * 120)
+ids = []
+for i, m in enumerate(data, 1):
+    mid = m.get("id", "")
+    pt = m.get("pipeline_tag") or "-"
+    dl = m.get("downloads") or 0
+    likes = m.get("likes") or 0
+    upd = m.get("lastModified") or m.get("createdAt") or ""
+    name = mid if len(mid) <= 58 else mid[:55] + "..."
+    print("{:<4}{:<60}{:<22}{:>10}  {:>6}  {}".format(
+        i, name, pt, dl, likes, fmt_age(upd)
+    ))
+    ids.append(mid)
+print("---ILLAMA-IDS-BEGIN---")
+for mid in ids:
+    print(mid)
+print("---ILLAMA-IDS-END---")
+') || error "Failed to parse HuggingFace response."
+
+    local sentinel="---ILLAMA-IDS-BEGIN---"
+    local table_part="${rendered%%$sentinel*}"
+    local ids_block="${rendered#*$sentinel}"
+    ids_block="${ids_block%---ILLAMA-IDS-END---*}"
+
+    printf '%s' "$table_part"
+
+    local -a ids=()
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        ids+=("$line")
+    done <<< "$ids_block"
+
+    if (( ${#ids[@]} == 0 )); then
+        echo ""
+        warn "No models matched the query."
+        return 0
+    fi
+
+    echo ""
+    local selection=""
+    read -p "Pull which one? [1-${#ids[@]} / Enter to skip]: " selection
+    if [[ -z "$selection" ]]; then
+        return 0
+    fi
+    if ! [[ "$selection" =~ ^[1-9][0-9]*$ ]] || (( selection < 1 || selection > ${#ids[@]} )); then
+        error "Invalid selection: '$selection'"
+    fi
+    local picked="${ids[$((selection - 1))]}"
+    log "→ Pulling ${picked}"
+    cmd_pull "$picked"
+}
+
+cmd_prune() {
+    local target="${1:-builder}"
+    case "$target" in
+        builder)
+            if ! docker image inspect "$BUILDER_IMG" >/dev/null 2>&1; then
+                warn "Builder image not present — nothing to prune."
+                return 0
+            fi
+            read -p "Remove builder image $BUILDER_IMG (~5 GB)? [y/N]: " confirm
+            if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+                return 0
+            fi
+            docker image rm "$BUILDER_IMG"
+            success "Builder image removed. It will be rebuilt on the next non-OpenVINO 'illama pull'."
+            ;;
+        *)
+            error "Usage: illama prune [builder]"
+            ;;
+    esac
+}
+
+# ============================================================================
+# Main
+# ============================================================================
+
+# Parse global options
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -v|--verbose)
+            VERBOSE=1
+            shift
+            ;;
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+# Ensure directories exist
+mkdir -p "$REGISTRY" "${ILLAMA_HOME}/config" "${ILLAMA_HOME}/cache"
+
+# Route to command
+case "${1:-}" in
+    serve)
+        cmd_serve
+        ;;
+    stop)
+        cmd_stop
+        ;;
+    ps)
+        cmd_ps
+        ;;
+    pull)
+        shift
+        cmd_pull "$@"
+        ;;
+    link)
+        cmd_link "${2:-}" "${3:-}" "${4:-4}"
+        ;;
+    unlink)
+        cmd_unlink "${2:-}"
+        ;;
+    search)
+        shift
+        cmd_search "$@"
+        ;;
+    list)
+        shift
+        cmd_list "$@"
+        ;;
+    rm)
+        cmd_rm "$2"
+        ;;
+    show)
+        cmd_show "$2"
+        ;;
+    run)
+        shift
+        cmd_run "$@"
+        ;;
+    logs)
+        cmd_logs "${2:-}"
+        ;;
+    bench)
+        shift
+        cmd_bench "$@"
+        ;;
+    prune)
+        cmd_prune "${2:-builder}"
+        ;;
+    gc)
+        shift
+        cmd_gc "$@"
+        ;;
+    doctor)
+        cmd_doctor
+        ;;
+    version)
+        cmd_version
+        ;;
+    "")
+        show_help
+        ;;
+    *)
+        error "Unknown command: $1. Run 'illama --help' for usage."
+        ;;
+esac
