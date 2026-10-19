@@ -15,6 +15,7 @@ nightly profiles remain separately pinned; see [CHANGELOG.md](CHANGELOG.md).
 | [Arc Pro B50 quickstart](docs/arc-b50-quickstart.md) | Build, select the correct GPU, configure, infer, and roll back |
 | [October 18, 2026 measurements](docs/benchmarks/2026-10-18-b50.md) | Three models, exact nightly versions, reproducible protocol and limitations |
 | [Security policy](SECURITY.md) | Credential handling, trusted-network scope and reporting |
+| [OpenWebUI integration](https://github.com/mkhomutskyi/openwebui-local-ai-stack) | Bring Illama, ComfyUI and local TTS/STT together with persistent chat/RAG |
 
 This repository covers Illama LLM inference only. Image-generation setup lives
 in [comfyui-intel-arc](https://github.com/mkhomutskyi/comfyui-intel-arc), and
