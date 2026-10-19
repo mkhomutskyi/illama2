@@ -1,5 +1,13 @@
 """Publication checks must catch metadata leaks without printing their values."""
-from scripts.check_public_secrets import scan
+import importlib.util
+from pathlib import Path
+
+_spec = importlib.util.spec_from_file_location(
+    "public_scan", Path(__file__).resolve().parents[1] / "scripts/check_public_secrets.py"
+)
+_module = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_module)
+scan = _module.scan
 
 
 def test_personal_email_in_commit_metadata_is_reported_without_value():
